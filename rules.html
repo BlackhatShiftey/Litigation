@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Rules · Litigation</title>
+<link rel="stylesheet" href="/rules.css">
+<link rel="stylesheet" href="/shared-nav.css">
+<script src="/shared-nav.js" defer></script>
+</head>
+<body>
+<header class="litigation-nav">
+  <a class="litigation-nav__brand" href="/"><span aria-hidden="true">⚖</span>Litigation</a>
+  <nav class="litigation-nav__tabs" aria-label="Workspace sections">
+    <a href="/">Chat</a><a href="/projects">Projects</a><a href="/rules" aria-current="page">Rules</a><a href="/knowledge">Knowledge</a>
+  </nav>
+  <div class="litigation-nav__actions"><a class="litigation-nav__new" href="/?new=1">New chat</a></div>
+</header>
+<div class="rules-shell">
+  <aside class="rule-index" id="rule-index" aria-label="Rules index">
+    <header class="rule-controls">
+      <strong>Rules index</strong>
+      <button class="icon-button mobile-only" id="close-index" type="button" aria-label="Close rules index">×</button>
+    </header>
+    <div class="index-heading">
+      <p>Global authority, then one branch for each model family.</p>
+    </div>
+    <nav class="scope-list" id="scope-list" aria-label="Rule sections"></nav>
+    <div class="index-foot">Published revisions are permanent. Changes add history; they never replace it.</div>
+  </aside>
+
+  <main class="rule-workbench">
+    <div class="notice error" id="error" role="alert" hidden></div>
+    <div class="notice success" id="notice" role="status" hidden></div>
+    <header class="rule-header">
+      <button class="icon-button mobile-only" id="open-index" type="button" aria-label="Open rules index">☰</button>
+      <div>
+        <p class="position">Rules ledger</p>
+        <h1 id="scope-title">Global</h1>
+        <p id="scope-description">The authority every agent receives with its model-specific section.</p>
+      </div>
+      <div class="header-actions">
+        <button class="quiet" id="suggest-button" type="button">Suggest revision</button>
+        <button class="primary" id="publish-button" type="button">Publish revision</button>
+      </div>
+    </header>
+
+    <div class="authority-strip">
+      <span><b>Global rules win</b> when sections conflict</span>
+      <span><b>Agent suggestions</b> require evidence and human acceptance</span>
+      <span><b>Snapshots</b> stay attached to queued work</span>
+    </div>
+
+    <nav class="view-tabs" aria-label="Rules views">
+      <button id="tab-active" type="button" data-view="active" aria-selected="true">Active rules</button>
+      <button id="tab-history" type="button" data-view="history" aria-selected="false">Revision history</button>
+      <button id="tab-proposals" type="button" data-view="proposals" aria-selected="false">Proposals <span id="proposal-count"></span></button>
+    </nav>
+
+    <section class="view active" id="view-active" aria-labelledby="tab-active">
+      <div class="document-meta">
+        <div><span>Revision</span><strong id="active-revision">—</strong></div>
+        <div><span>Origin</span><strong id="active-origin">—</strong></div>
+        <div><span>Published</span><strong id="active-time">—</strong></div>
+        <div><span>Content hash</span><code id="active-hash">—</code></div>
+      </div>
+      <article class="rule-paper"><pre id="active-content"></pre></article>
+    </section>
+
+    <section class="view" id="view-history" aria-labelledby="tab-history" hidden>
+      <div class="pane-heading"><div><h2>Revision history</h2><p>Each published rulebook remains available as evidence.</p></div></div>
+      <ol class="history-list" id="history-list"></ol>
+      <button class="quiet history-more" id="history-more" type="button" hidden>Load older revisions</button>
+    </section>
+
+    <section class="view" id="view-proposals" aria-labelledby="tab-proposals" hidden>
+      <div class="pane-heading"><div><h2>Improvement proposals</h2><p>Suggestions are inert until you review and accept them.</p></div></div>
+      <div class="proposal-list" id="proposal-list"></div>
+    </section>
+  </main>
+</div>
+
+<dialog id="revision-dialog" aria-labelledby="revision-dialog-title">
+  <form method="dialog" id="revision-form">
+    <div class="dialog-head">
+      <div><h2 id="revision-dialog-title">Publish revision</h2><p id="revision-dialog-note"></p></div>
+      <button class="icon-button dialog-close" type="button" aria-label="Close">×</button>
+    </div>
+    <label>Summary<input id="revision-summary" required maxlength="2000" placeholder="What changed and why"></label>
+    <label>Rule content<textarea id="revision-content" required rows="20" spellcheck="false"></textarea></label>
+    <p class="field-help" id="revision-help"></p>
+    <div class="form-error" id="revision-error" role="alert"></div>
+    <div class="dialog-actions"><button class="quiet dialog-close" type="button">Cancel</button><button class="primary" id="revision-submit" type="submit">Publish revision</button></div>
+  </form>
+</dialog>
+
+<script src="/rules.js" defer></script>
+</body>
+</html>

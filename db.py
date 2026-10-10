@@ -28,6 +28,7 @@ class Database:
                     title text not null,
                     participants text not null,
                     crosstalk integer not null default 0,
+                    workspace text,
                     created_at real not null
                 );
                 create table if not exists messages (
@@ -42,20 +43,25 @@ class Database:
                 create index if not exists idx_messages_room on messages(room_id, created_at);
                 """
             )
+            # migration for databases created before workspaces existed
+            cols = {r[1] for r in self._conn.execute("pragma table_info(rooms)")}
+            if "workspace" not in cols:
+                self._conn.execute("alter table rooms add column workspace text")
 
     # -- rooms --------------------------------------------------------------
 
     def create_room(self, title: str, participants: list[dict[str, Any]],
-                    crosstalk: bool = False) -> dict[str, Any]:
+                    crosstalk: bool = False, workspace: str | None = None) -> dict[str, Any]:
         room_id = uuid.uuid4().hex[:12]
         now = time.time()
         with self._lock, self._conn:
             self._conn.execute(
-                "insert into rooms (id, title, participants, crosstalk, created_at) values (?,?,?,?,?)",
-                (room_id, title, json.dumps(participants), int(crosstalk), now),
+                "insert into rooms (id, title, participants, crosstalk, workspace, created_at)"
+                " values (?,?,?,?,?,?)",
+                (room_id, title, json.dumps(participants), int(crosstalk), workspace, now),
             )
         return {"id": room_id, "title": title, "participants": participants,
-                "crosstalk": crosstalk, "created_at": now}
+                "crosstalk": crosstalk, "workspace": workspace, "created_at": now}
 
     def list_rooms(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -70,7 +76,8 @@ class Database:
         return self._room_row(row) if row else None
 
     def update_room(self, room_id: str, **fields: Any) -> None:
-        allowed = {"title": "title", "crosstalk": "crosstalk", "participants": "participants"}
+        allowed = {"title": "title", "crosstalk": "crosstalk",
+                   "participants": "participants", "workspace": "workspace"}
         sets, vals = [], []
         for key, col in allowed.items():
             if key in fields:
@@ -99,6 +106,7 @@ class Database:
             "title": row["title"],
             "participants": json.loads(row["participants"]),
             "crosstalk": bool(row["crosstalk"]),
+            "workspace": row["workspace"] if "workspace" in row.keys() else None,
             "created_at": row["created_at"],
         }
 

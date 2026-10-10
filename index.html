@@ -11,15 +11,14 @@
   --accent: #f59e0b; --user: #2563eb;
 }
 * { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; overflow: hidden; }
+body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+.chat-shell { min-height: 0; flex: 1; display: flex; }
 
 /* Sidebar */
 #sidebar { width: 270px; min-width: 270px; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
 #sidebar header { padding: 16px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; }
 #sidebar header h1 { font-size: 16px; letter-spacing: .05em; color: var(--accent); }
 #gavel { font-size: 20px; }
-#new-room-btn { margin: 12px; padding: 9px; background: var(--accent); color: #111; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; }
-#new-room-btn:hover { filter: brightness(1.1); }
 #room-list { flex: 1; overflow-y: auto; padding: 4px 8px; }
 .room-item { padding: 10px 12px; border-radius: 8px; cursor: pointer; margin-bottom: 2px; display: flex; justify-content: space-between; align-items: center; }
 .room-item:hover { background: var(--bg3); }
@@ -54,6 +53,11 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
 .bubble .toksaved { font-size: 9px; color: var(--accent); margin-top: 6px; opacity: .8; }
 .typing { font-size: 11px; color: var(--dim); margin: 4px 24px; font-style: italic; }
 
+/* Coding-mode diff bubbles */
+.diffview { background: #0d1117; border: 1px dashed var(--border); border-radius: 8px; padding: 10px 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; line-height: 1.45; white-space: pre; overflow-x: auto; overflow-y: auto; max-height: 340px; color: #c9d1d9; margin: 4px 0 0; }
+.diffview .add { color: #3fb950; } .diffview .del { color: #f85149; } .diffview .meta { color: #8b949e; }
+.msg.diff-msg { max-width: 86%; }
+
 /* Court verdict card */
 .verdict-card { max-width: 82%; margin: 14px 24px; border: 1px solid var(--accent); border-radius: 12px; overflow: hidden; }
 .verdict-card .vh { background: rgba(245,158,11,.12); padding: 10px 14px; font-size: 12px; font-weight: 700; color: var(--accent); letter-spacing: .04em; }
@@ -78,16 +82,40 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
 #send:disabled { opacity: .4; cursor: not-allowed; }
 
 /* Modal */
-#modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.65); display: none; align-items: center; justify-content: center; z-index: 10; }
+#modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.65); display: none; align-items: center; justify-content: center; z-index: 120; }
 #modal-bg.show { display: flex; }
-#modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; width: 420px; max-height: 85vh; overflow-y: auto; padding: 20px; }
+#modal { background: var(--bg2); border: 1px solid var(--border); border-radius: 14px; width: 680px; max-width: calc(100vw - 24px); max-height: 85vh; overflow-y: auto; padding: 20px; }
 #modal h2 { font-size: 15px; margin-bottom: 14px; }
-.model-row { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px; cursor: pointer; }
-.model-row.off { opacity: .45; cursor: not-allowed; }
+.model-group { margin: 14px 0 8px; color: var(--dim); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.model-row { display: grid; grid-template-columns: auto auto minmax(180px, 1fr) 145px auto; align-items: center; gap: 10px; padding: 10px; border: 1px solid var(--border); border-radius: 9px; margin-bottom: 8px; }
+.model-row.subscription { border-color: rgba(245,158,11,.45); background: rgba(245,158,11,.035); }
+.model-row.off { opacity: .72; }
 .model-row input[type=checkbox] { accent-color: var(--accent); }
 .model-row .m-name { font-size: 13px; font-weight: 600; }
 .model-row .m-model { font-size: 10px; color: var(--dim); }
-.model-row input[type=text] { margin-left: auto; width: 130px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 4px 8px; font-size: 10.5px; }
+.model-row .m-meta { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 4px; }
+.model-row .m-badge { font-size: 9px; color: var(--dim); border: 1px solid var(--border); border-radius: 99px; padding: 1px 6px; }
+.model-row .m-status.verified { color: #4ade80; }
+.model-row .m-status.error, .model-row .m-status.blocked { color: #f87171; }
+.model-row .m-hint { grid-column: 3 / -1; color: var(--dim); font-size: 10px; line-height: 1.35; }
+.model-row input[type=text] { width: 145px; background: var(--bg); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 5px 8px; font-size: 10.5px; }
+.check-model { min-width: 104px; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--border); color: var(--text); background: var(--bg3); font-size: 10.5px; cursor: pointer; }
+.check-model:hover { border-color: var(--accent); color: var(--accent); }
+.check-model:disabled { opacity: .55; cursor: wait; }
+@media (max-width: 640px) {
+  .chat-shell { flex-direction: column; }
+  #sidebar { width: 100%; min-width: 0; max-height: 31vh; border-right: 0; border-bottom: 1px solid var(--border); }
+  #room-list { min-height: 54px; }
+  #main { min-height: 0; }
+  #topbar { flex-wrap: wrap; padding: 8px 10px; }
+  #room-title { flex: 1 0 100%; }
+  .msg, .verdict-card { max-width: calc(100% - 24px); margin-right: 12px; margin-left: 12px; }
+  #composer-wrap { padding: 8px 10px 10px; }
+  #send { padding: 0 14px; }
+  .model-row { grid-template-columns: auto auto 1fr auto; }
+  .model-row input[type=text] { grid-column: 3 / -1; width: 100%; }
+  .model-row .m-hint { grid-column: 3 / -1; }
+}
 #modal label.ck { display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--dim); margin: 12px 0; }
 #modal .actions { display: flex; gap: 10px; margin-top: 16px; }
 #modal .actions button { flex: 1; padding: 9px; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; }
@@ -97,11 +125,19 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
 #empty-state .big { font-size: 44px; }
 ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 </style>
+<link rel="stylesheet" href="/shared-nav.css">
+<script src="/shared-nav.js" defer></script>
 </head>
 <body>
+<header class="litigation-nav">
+  <a class="litigation-nav__brand" href="/"><span aria-hidden="true">⚖</span>Litigation</a>
+  <nav class="litigation-nav__tabs" aria-label="Workspace sections">
+    <a href="/" aria-current="page">Chat</a><a href="/projects">Projects</a><a href="/rules">Rules</a><a href="/knowledge">Knowledge</a>
+  </nav>
+  <div class="litigation-nav__actions"><button class="litigation-nav__new" id="new-room-btn" type="button">New chat</button></div>
+</header>
+<div class="chat-shell">
 <div id="sidebar">
-  <header><span id="gavel">⚖️</span><h1>LITIGATION</h1></header>
-  <button id="new-room-btn">+ New chat</button>
   <div id="room-list"></div>
 </div>
 <div id="main">
@@ -109,6 +145,7 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
     <div id="room-title"></div>
     <span class="pill" id="room-members"></span>
     <button class="topbtn" id="crosstalk-btn" title="Let agents see and reply to each other via the decoder ring">Ring: off</button>
+    <button class="topbtn" id="code-btn" title="Coding mode: qualified coding agents edit the shared workspace; chat-only subscription agents can review without file access">Code: off</button>
     <button class="topbtn" id="vote-btn" title="Ask every participant for a verdict">⚖ Call vote</button>
   </div>
   <div id="chat"></div>
@@ -121,10 +158,13 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
     </div>
   </div>
 </div>
+</div>
 <div id="modal-bg">
   <div id="modal">
     <h2>New chat room</h2>
     <div id="model-rows"></div>
+    <input type="text" id="ws-input" placeholder="Shared git workspace for coding mode (optional) — e.g. ~/Projects/myapp"
+           style="width:100%; box-sizing:border-box; margin:10px 0 2px; padding:8px 10px; background:var(--bg3); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px;">
     <label class="ck"><input type="checkbox" id="ct-check"> Enable decoder-ring cross-talk (agents reply to each other)</label>
     <div class="actions">
       <button id="cancel-btn">Cancel</button>
@@ -139,9 +179,10 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
   ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 const state = {
-  models: [],          // [{id,label,color,model,available}]
+  models: [],          // safe provider metadata from /api/models
   rooms: [],
-  room: null,          // current room {id,title,participants,crosstalk,messages}
+  room: null,          // current room {id,title,participants,crosstalk,workspace,messages}
+  codeMode: false,     // coding mode toggle for the current room
   selected: new Set(), // targeted agent ids for the next message (empty = all)
   busy: false,
   agentColor: {}, agentLabel: {},
@@ -155,6 +196,7 @@ const api = {
     return r.json();
   },
   models: () => api.json('/api/models'),
+  checkModel: (id) => api.json('/api/models/' + encodeURIComponent(id) + '/check', {method: 'POST'}),
   rooms: () => api.json('/api/rooms'),
   room: (id) => api.json('/api/rooms/' + id),
   createRoom: (body) => api.json('/api/rooms', {method: 'POST', body: JSON.stringify(body)}),
@@ -203,21 +245,107 @@ async function refreshRooms() {
 
 /* ---------------- New room modal ---------------- */
 
-function openModal() {
+const SUBSCRIPTION_TARGETS = ['grok', 'gemini', 'glm', 'cline', 'claude'];
+
+async function refreshModels() {
+  state.models = await api.models();
+  syncAgentMeta();
+}
+
+function modelStatus(m) {
+  if (m.connection_status === 'verified') return ['Verified now', 'verified'];
+  if (m.connection_status === 'error') return ['Needs attention', 'error'];
+  const labels = {
+    installed_unverified: 'Installed · not verified',
+    configured_unverified: 'Configured · not verified',
+    not_installed: 'Not installed',
+    not_configured: 'Setup needed',
+    safety_blocked: 'Held unavailable',
+  };
+  return [labels[m.setup_status] || 'Not verified', m.setup_status === 'safety_blocked' ? 'blocked' : ''];
+}
+
+function captureModelForm() {
+  const values = {};
+  for (const row of $('model-rows').querySelectorAll('.model-row')) {
+    const cb = row.querySelector('input[type=checkbox]');
+    values[cb.dataset.id] = {
+      checked: cb.checked,
+      model: row.querySelector('input[type=text]').value,
+    };
+  }
+  return values;
+}
+
+function renderModelRows(saved = {}) {
   const wrap = $('model-rows');
   wrap.innerHTML = '';
-  for (const m of state.models) {
-    const row = document.createElement('div');
-    row.className = 'model-row' + (m.available ? '' : ' off');
-    row.innerHTML =
-      `<input type="checkbox" data-id="${esc(m.id)}" ${m.available ? '' : 'disabled'}>
-       <span class="dot" style="width:10px;height:10px;border-radius:50%;background:${m.color}"></span>
-       <div><div class="m-name">${esc(m.label)}${m.available ? '' : ' <span style="color:#f87171;font-size:9px">no key</span>'}${m.local ? ' <span style="color:var(--accent);font-size:9px">local</span>' : ''}</div>
-       <div class="m-model">${esc(m.model)}</div></div>
-       <input type="text" placeholder="model override" title="Model id override">`;
-    wrap.appendChild(row);
+  const byId = new Map(state.models.map(m => [m.id, m]));
+  const subscriptions = SUBSCRIPTION_TARGETS.map(id => byId.get(id)).filter(Boolean);
+  const rest = state.models.filter(m => !SUBSCRIPTION_TARGETS.includes(m.id) && m.id !== 'antigravity');
+  const groups = [
+    ['Subscription accounts', subscriptions],
+    ['Other providers', rest],
+  ];
+  for (const [title, models] of groups) {
+    if (!models.length) continue;
+    const heading = document.createElement('div');
+    heading.className = 'model-group';
+    heading.textContent = title;
+    wrap.appendChild(heading);
+    for (const m of models) {
+      const subscription = SUBSCRIPTION_TARGETS.includes(m.id);
+      const [status, statusClass] = modelStatus(m);
+      const transport = m.transport || 'provider API';
+      const billing = subscription || m.billing === 'subscription'
+        ? 'Subscription'
+        : m.local
+          ? 'Local'
+          : String(transport).toLowerCase().includes('cli')
+            ? 'CLI account'
+            : 'API billing';
+      const hint = m.check_message || m.blocked_reason || m.setup_hint || '';
+      const prior = saved[m.id] || {};
+      const row = document.createElement('div');
+      row.className = 'model-row' + (subscription ? ' subscription' : '') + (m.available ? '' : ' off');
+      row.innerHTML =
+        `<input type="checkbox" data-id="${esc(m.id)}" ${m.available ? '' : 'disabled'} ${prior.checked && m.available ? 'checked' : ''}>
+       <span class="dot" style="width:10px;height:10px;border-radius:50%;background:${esc(m.color)}"></span>
+         <div><div class="m-name">${esc(m.label)}</div>
+         <div class="m-model">${esc(m.model || 'provider default')}</div>
+         <div class="m-meta"><span class="m-badge">${esc(billing)}</span><span class="m-badge">${esc(transport)}</span><span class="m-badge m-status ${statusClass}">${esc(status)}</span></div></div>
+         <input type="text" value="${esc(prior.model || '')}" placeholder="model override" title="Model id override">
+         ${subscription ? `<button type="button" class="check-model" data-id="${esc(m.id)}">Test connection</button>` : '<span></span>'}
+         ${hint ? `<div class="m-hint">${esc(hint)}</div>` : ''}`;
+      wrap.appendChild(row);
+    }
   }
+}
+
+async function openModal() {
   $('modal-bg').classList.add('show');
+  $('model-rows').innerHTML = '<div class="model-group">Refreshing provider status…</div>';
+  try {
+    await refreshModels();
+    renderModelRows();
+  } catch (e) {
+    $('model-rows').innerHTML = `<div class="m-hint">Could not refresh providers: ${esc(e.message)}</div>`;
+  }
+}
+
+async function checkModel(id, button) {
+  const saved = captureModelForm();
+  button.disabled = true;
+  button.textContent = 'Checking…';
+  try {
+    await api.checkModel(id);
+    await refreshModels();
+    renderModelRows(saved);
+  } catch (e) {
+    button.disabled = false;
+    button.textContent = 'Try again';
+    alert(e.message);
+  }
 }
 
 async function createRoom() {
@@ -230,7 +358,8 @@ async function createRoom() {
   }
   if (!participants.length) { alert('Pick at least one model.'); return; }
   const room = await api.createRoom({
-    participants, crosstalk: $('ct-check').checked});
+    participants, crosstalk: $('ct-check').checked,
+    workspace: $('ws-input').value.trim()});
   $('modal-bg').classList.remove('show');
   await refreshRooms();
   openRoom(room.id);
@@ -241,6 +370,7 @@ async function createRoom() {
 async function openRoom(id) {
   state.room = await api.room(id);
   state.selected = new Set();
+  state.codeMode = false;
   syncAgentMeta();
   renderRoom();
   refreshRooms();
@@ -257,6 +387,11 @@ function renderRoom() {
   $('room-members').textContent = r.participants.map(p => p.label).join(' · ');
   $('crosstalk-btn').textContent = 'Ring: ' + (r.crosstalk ? 'on' : 'off');
   $('crosstalk-btn').classList.toggle('on', r.crosstalk);
+  $('code-btn').textContent = 'Code: ' + (state.codeMode ? 'on' : 'off');
+  $('code-btn').classList.toggle('on', state.codeMode);
+  $('code-btn').title = r.workspace
+    ? `Coding mode — qualified coding agents edit ${r.workspace}; chat-only subscription agents review without file access`
+    : 'Coding mode — set a shared git workspace; only qualified coding agents receive file access';
   const chat = $('chat');
   chat.innerHTML = '';
   for (const m of r.messages) {
@@ -277,14 +412,27 @@ function messageEl(sender, content, raw) {
   let tools = '';
   if (raw) tools =
     `<button class="raw-btn">ring</button><span class="raw-view" style="display:none">${esc(raw)}</span>`;
+  // stored coding-mode diffs arrive as ```diff blocks — render them as panels
+  const dm = content.startsWith('```diff')
+    ? content.replace(/^```diff\n?/, '').replace(/\n?```\s*$/, '') : null;
   div.innerHTML =
     `<div class="who"><span class="dot" style="background:${isUser ? 'var(--user)' : colorOf(sender)}"></span>
      <b>${esc(who)}</b>${tools}</div>
-     <div class="bubble">${esc(content)}</div>`;
+     <div class="bubble">${dm ? `<pre class="diffview">${esc(dm)}</pre>` : esc(content)}</div>`;
   if (raw) {
     const btn = div.querySelector('.raw-btn'), view = div.querySelector('.raw-view');
     btn.onclick = () => { view.style.display = view.style.display === 'none' ? 'block' : 'none'; };
   }
+  return div;
+}
+
+function diffMessageEl(agent, diff) {
+  const div = document.createElement('div');
+  div.className = 'msg diff-msg';
+  div.innerHTML =
+    `<div class="who"><span class="dot" style="background:${colorOf(agent)}"></span>
+     <b>${esc(labelOf(agent))}</b> <span class="ring-kind">🔨 patch committed</span></div>
+     <pre class="diffview">${esc(diff)}</pre>`;
   return div;
 }
 
@@ -385,7 +533,8 @@ async function send() {
   const resp = await fetch(`/api/rooms/${state.room.id}/send`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({text, targets: [...state.selected]}),
+    body: JSON.stringify({text, targets: [...state.selected],
+                          mode: state.codeMode ? 'code' : 'chat'}),
   });
   if (!resp.ok) {
     const err = await resp.json().catch(() => ({}));
@@ -458,6 +607,11 @@ function handleEvent(ev, ctx) {
       chat.scrollTop = chat.scrollHeight;
       break;
     }
+    case 'diff': {
+      chat.appendChild(diffMessageEl(ev.agent, ev.diff));
+      chat.scrollTop = chat.scrollHeight;
+      break;
+    }
     case 'turn_done': break;
   }
 }
@@ -489,6 +643,10 @@ async function callVote() {
 /* ---------------- Wire-up ---------------- */
 
 $('new-room-btn').onclick = openModal;
+$('model-rows').onclick = (e) => {
+  const button = e.target.closest('.check-model');
+  if (button) checkModel(button.dataset.id, button);
+};
 $('cancel-btn').onclick = () => $('modal-bg').classList.remove('show');
 $('create-btn').onclick = createRoom;
 $('modal-bg').onclick = (e) => { if (e.target.id === 'modal-bg') $('modal-bg').classList.remove('show'); };
@@ -503,11 +661,21 @@ $('crosstalk-btn').onclick = async () => {
   state.room = await api.patchRoom(state.room.id, {crosstalk: next});
   renderRoom();
 };
+$('code-btn').onclick = async () => {
+  if (!state.room) return;
+  if (!state.codeMode && !state.room.workspace) {
+    const ws = prompt('Path to the shared git workspace for coding mode\n(created and git-inited if missing):',
+                      state.room.title.replace(/[^\w.-]+/g, '-').toLowerCase());
+    if (ws === null || !ws.trim()) return;
+    state.room = await api.patchRoom(state.room.id, {workspace: ws.trim()});
+  }
+  state.codeMode = !state.codeMode;
+  renderRoom();
+};
 
 (async function init() {
   try {
-    state.models = await api.models();
-    syncAgentMeta();
+    await refreshModels();
     await refreshRooms();
   } catch (e) {
     alert('Failed to load models: ' + e.message);
