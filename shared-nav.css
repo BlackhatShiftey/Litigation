@@ -1,0 +1,76 @@
+:root { --litigation-nav-height: 58px; }
+.litigation-nav {
+  position: sticky;
+  z-index: 80;
+  top: 0;
+  min-width: 0;
+  height: var(--litigation-nav-height);
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 0 18px;
+  border-bottom: 1px solid var(--rule, var(--line, var(--border, #2d3748)));
+  background: #11161d;
+  color: #e6edf3;
+  font: 13px/1.2 Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+.litigation-nav__brand {
+  color: #f59e0b;
+  font-weight: 760;
+  letter-spacing: .025em;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.litigation-nav__brand span { margin-right: 7px; color: #e6edf3; }
+.litigation-nav__tabs { min-width: 0; display: flex; align-items: stretch; gap: 3px; overflow-x: auto; }
+.litigation-nav__tabs a {
+  position: relative;
+  flex: 0 0 auto;
+  padding: 10px 11px;
+  border-radius: 5px;
+  color: #8b949e;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.litigation-nav__tabs a:hover { color: #e6edf3; background: #1c2331; }
+.litigation-nav__tabs a[aria-current="page"] { color: #e6edf3; background: rgba(245,158,11,.08); }
+.litigation-nav__tabs a[aria-current="page"]::after {
+  position: absolute;
+  right: 9px;
+  bottom: 2px;
+  left: 9px;
+  height: 2px;
+  background: #f59e0b;
+  content: "";
+}
+.litigation-nav__actions { min-width: 0; display: flex; align-items: center; justify-content: flex-end; gap: 9px; }
+.litigation-nav__new {
+  padding: 8px 11px;
+  border: 1px solid #f6ad2a;
+  border-radius: 6px;
+  background: #f59e0b;
+  color: #17110a;
+  font-size: 11px;
+  font-weight: 750;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.litigation-nav__new:hover { filter: brightness(1.07); }
+.litigation-nav__status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 640px) {
+  :root { --litigation-nav-height: 94px; }
+  .litigation-nav {
+    height: var(--litigation-nav-height);
+    grid-template-columns: minmax(0,1fr) auto;
+    grid-template-areas: "brand actions" "tabs tabs";
+    gap: 5px 10px;
+    padding: 8px 10px 7px;
+  }
+  .litigation-nav__brand { grid-area: brand; }
+  .litigation-nav__tabs { grid-area: tabs; }
+  .litigation-nav__tabs a { flex: 1 0 auto; padding: 8px 9px; text-align: center; font-size: 11px; }
+  .litigation-nav__actions { grid-area: actions; }
+  .litigation-nav__status { display: none; }
+  .litigation-nav__new { padding: 7px 9px; }
+}

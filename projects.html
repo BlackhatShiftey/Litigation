@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Projects · Litigation</title>
+<link rel="stylesheet" href="/projects.css">
+<link rel="stylesheet" href="/shared-nav.css">
+<script src="/shared-nav.js" defer></script>
+</head>
+<body>
+<header class="litigation-nav">
+  <a class="litigation-nav__brand" href="/"><span aria-hidden="true">⚖</span>Litigation</a>
+  <nav class="litigation-nav__tabs" aria-label="Workspace sections">
+    <a href="/">Chat</a><a href="/projects" aria-current="page">Projects</a><a href="/rules">Rules</a><a href="/knowledge">Knowledge</a>
+  </nav>
+  <div class="litigation-nav__actions"><a class="litigation-nav__new" href="/?new=1">New chat</a></div>
+</header>
+<div class="app-shell">
+  <aside class="project-rail" id="project-rail" aria-label="Projects">
+    <header class="rail-controls">
+      <strong>Projects</strong>
+      <button class="icon-button mobile-only" id="close-projects" type="button" aria-label="Close project list">×</button>
+    </header>
+    <button class="primary rail-action" id="new-project-button" type="button">New project</button>
+    <div class="rail-label">Your case files</div>
+    <div class="project-list" id="project-list" role="list"></div>
+    <div class="rail-foot">Local workspace. Nothing is published or pushed to a remote.</div>
+  </aside>
+
+  <main class="workbench">
+    <div class="global-error" id="global-error" role="alert" hidden></div>
+    <div class="global-notice" id="global-notice" role="status" hidden></div>
+    <section class="empty-project" id="empty-project">
+      <button class="icon-button mobile-only empty-menu" id="open-projects-empty" type="button" aria-label="Open project list">☰</button>
+      <div class="empty-mark" aria-hidden="true">§</div>
+      <h1>Open a project case file</h1>
+      <p>Track issues, hand work to subscription agents, inspect outputs, and apply reviewed Git proposals.</p>
+      <button class="primary" id="empty-new-project" type="button">Create a project</button>
+    </section>
+
+    <div class="project-workspace" id="project-workspace" hidden>
+      <header class="project-header">
+        <button class="icon-button mobile-only" id="open-projects" type="button" aria-label="Open project list">☰</button>
+        <div class="project-heading">
+          <h1 id="project-name"></h1>
+          <p id="project-description"></p>
+          <div class="repo-line" id="project-repo"></div>
+        </div>
+        <div class="header-actions">
+          <button class="quiet" id="export-project" type="button">Export project</button>
+          <button class="quiet" id="new-issue-button" type="button">New issue</button>
+          <button class="primary" id="new-handoff-button" type="button">New handoff</button>
+        </div>
+      </header>
+
+      <div class="rules-strip" aria-label="Project rules">
+        <span><b>Background work</b> continues after this page closes</span>
+        <span><b>History</b> is append-only</span>
+        <span><b>Project main</b> changes only after Apply</span>
+      </div>
+
+      <nav class="tab-bar" id="project-tabs" aria-label="Project views">
+        <button id="tab-work" role="tab" type="button" data-view="work" aria-controls="view-work" aria-selected="true">Work</button>
+        <button id="tab-agent-room" role="tab" type="button" data-view="agent-room" aria-controls="view-agent-room" aria-selected="false">Agent room</button>
+        <button id="tab-issues" role="tab" type="button" data-view="issues" aria-controls="view-issues" aria-selected="false">Issues</button>
+        <button id="tab-debate" role="tab" type="button" data-view="debate" aria-controls="view-debate" aria-selected="false">Debate</button>
+        <button id="tab-history" role="tab" type="button" data-view="history" aria-controls="view-history" aria-selected="false">History</button>
+        <button id="tab-code" role="tab" type="button" data-view="code" aria-controls="view-code" aria-selected="false">Code</button>
+      </nav>
+
+      <section class="view active" id="view-work" role="tabpanel" aria-labelledby="tab-work">
+        <div class="ledger-pane">
+          <div class="pane-heading">
+            <div><h2>Work ledger</h2><p>Agent tasks and their durable outputs.</p></div>
+            <span class="live-note" id="polling-note">Background polling on</span>
+          </div>
+          <div class="activity-list" id="handoff-list"></div>
+        </div>
+        <aside class="evidence-pane" id="evidence-pane" aria-label="Selected work output">
+          <div class="detail-empty" id="output-empty">Select a handoff to inspect its instructions, status, and outputs.</div>
+          <div id="output-detail" hidden>
+            <div class="detail-head">
+              <div><span class="status-chip" id="detail-status"></span><h2 id="detail-title"></h2></div>
+              <div class="detail-actions" id="handoff-actions"></div>
+            </div>
+            <dl class="handoff-meta" id="handoff-meta"></dl>
+            <section class="brief-block"><h3>Instructions</h3><p id="detail-instructions"></p></section>
+            <section class="brief-block"><h3>Acceptance</h3><ul id="detail-acceptance"></ul></section>
+            <section class="agent-execution" id="agent-execution" aria-labelledby="agent-execution-title" hidden>
+              <div class="agent-execution-head">
+                <div><span class="eyebrow">Branch execution record</span><h3 id="agent-execution-title">Coding agent</h3></div>
+                <span class="status-chip" id="agent-execution-status"></span>
+              </div>
+              <div id="agent-execution-body"></div>
+            </section>
+            <div class="output-tabs" id="output-tabs" role="tablist" aria-label="Outputs"></div>
+            <article class="output-paper" id="output-paper"></article>
+            <div class="output-actions" id="output-actions"></div>
+          </div>
+        </aside>
+      </section>
+
+      <section class="view single-pane" id="view-agent-room" role="tabpanel" aria-labelledby="tab-agent-room" hidden>
+        <div class="pane-heading">
+          <div><h2>Agent room</h2><p>A shared queue with enforced ownership, isolated handoffs, and durable progress.</p></div>
+          <div class="agent-room-actions">
+            <button class="quiet" id="verify-provenance" type="button">Verify local record</button>
+            <button class="primary" id="new-work-item-button" type="button">Add shared work</button>
+          </div>
+        </div>
+        <div class="provenance-banner" id="provenance-banner">Local provenance has not been checked in this view.</div>
+        <div class="agent-room-grid">
+          <section class="room-panel" aria-labelledby="shared-queue-title">
+            <div class="subhead"><h3 id="shared-queue-title">Shared queue</h3><span id="work-item-count">0 items</span></div>
+            <div class="work-item-list" id="work-item-list"></div>
+          </section>
+          <section class="room-panel" aria-labelledby="active-agents-title">
+            <div class="subhead"><h3 id="active-agents-title">Active agents</h3><span id="active-agent-count">0 active</span></div>
+            <div class="active-agent-list" id="active-agent-list"></div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view single-pane" id="view-issues" role="tabpanel" aria-labelledby="tab-issues" hidden>
+        <div class="pane-heading"><div><h2>Issues</h2><p>Every comment and state change creates a new history entry.</p></div></div>
+        <div class="split-list-detail">
+          <div class="record-list" id="issue-list"></div>
+          <article class="record-detail" id="issue-detail"><div class="detail-empty">Select an issue to review its record.</div></article>
+        </div>
+      </section>
+
+      <section class="view single-pane" id="view-debate" role="tabpanel" aria-labelledby="tab-debate" hidden>
+        <div class="pane-heading">
+          <div><h2>Debate bench</h2><p>Ask two to five agents for persisted positions and rebuttals.</p></div>
+          <button class="primary" id="new-debate-button" type="button">Start debate</button>
+        </div>
+        <div class="debate-list" id="debate-list"></div>
+      </section>
+
+      <section class="view single-pane" id="view-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+        <div class="pane-heading"><div><h2>History</h2><p>The chronological project record. Entries cannot be edited or deleted.</p></div></div>
+        <ol class="history-list" id="history-list"></ol>
+        <button class="quiet load-more" id="history-more" type="button" hidden>Load more history</button>
+      </section>
+
+      <section class="view single-pane" id="view-code" role="tabpanel" aria-labelledby="tab-code" hidden>
+        <div class="pane-heading"><div><h2>Code evidence</h2><p>Browse the project snapshot, choose context, and inspect proposals before applying.</p></div></div>
+        <div class="code-grid">
+          <aside class="file-browser">
+            <div class="subhead"><h3>Files at committed HEAD</h3><span id="selected-file-count">0 selected</span></div>
+            <div id="file-list"></div>
+          </aside>
+          <section class="file-viewer">
+            <div class="subhead"><h3 id="file-title">Select a file</h3><button class="quiet small" id="toggle-file-context" type="button" hidden>Add to context</button></div>
+            <pre id="file-content" tabindex="0">Choose a file to inspect its committed contents.</pre>
+          </section>
+          <aside class="proposal-viewer" id="proposal-viewer">
+            <div class="subhead"><h3>Proposal</h3><span class="status-chip" id="proposal-status">None selected</span></div>
+            <p id="proposal-summary">Open a proposal from an agent output to inspect its branch, checks state, and diff.</p>
+            <dl class="handoff-meta" id="proposal-meta"></dl>
+            <pre class="diff-paper" id="proposal-diff"></pre>
+            <div class="proposal-actions" id="proposal-actions"></div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<dialog id="project-dialog" aria-labelledby="project-dialog-title">
+  <form method="dialog" id="project-form">
+    <div class="dialog-head"><div><h2 id="project-dialog-title">New project</h2><p>Create an empty local project or import a committed Git snapshot.</p></div><button class="icon-button dialog-close" type="button" aria-label="Close">×</button></div>
+    <label>Project name<input id="project-input-name" name="name" required maxlength="120"></label>
+    <label>Description<textarea id="project-input-description" name="description" rows="3" maxlength="2000"></textarea></label>
+    <label>Local Git source <span>(optional)</span><input id="project-input-source" name="source_path" placeholder="/path/to/local/repository"></label>
+    <p class="field-help">Only committed HEAD is imported. The original repository stays unchanged and no remote is contacted.</p>
+    <div class="form-error" id="project-form-error" role="alert"></div>
+    <div class="dialog-actions"><button class="quiet dialog-close" type="button">Cancel</button><button class="primary" id="create-project-submit" type="submit">Create project</button></div>
+  </form>
+</dialog>
+
+<dialog id="handoff-dialog" aria-labelledby="handoff-dialog-title">
+  <form method="dialog" id="handoff-form">
+    <div class="dialog-head"><div><h2 id="handoff-dialog-title">New handoff</h2><p>Give one agent a bounded task with explicit acceptance criteria.</p></div><button class="icon-button dialog-close" type="button" aria-label="Close">×</button></div>
+    <div class="form-grid">
+      <label>Agent<select id="handoff-agent" required></select></label>
+      <label>Mode<select id="handoff-mode" required><option value="agent">Coding agent · tools + tests</option><option value="analysis">Analysis</option><option value="review">Review</option><option value="code">Code proposal · compatibility</option></select></label>
+    </div>
+    <label>Model override <span>(optional)</span><input id="handoff-model" placeholder="Use provider default"></label>
+    <label>Instructions<textarea id="handoff-instructions" rows="7" required></textarea></label>
+    <label>Acceptance criteria <span>(one per line)</span><textarea id="handoff-acceptance" rows="4" required></textarea></label>
+    <div class="context-summary" id="handoff-context-summary"></div>
+    <input id="handoff-parent" type="hidden">
+    <div class="form-error" id="handoff-form-error" role="alert"></div>
+    <div class="dialog-actions"><button class="quiet dialog-close" type="button">Cancel</button><button class="primary" id="create-handoff-submit" type="submit">Queue handoff</button></div>
+  </form>
+</dialog>
+
+<dialog id="work-item-dialog" aria-labelledby="work-item-dialog-title">
+  <form method="dialog" id="work-item-form">
+    <div class="dialog-head"><div><h2 id="work-item-dialog-title">Add shared work</h2><p>Define one bounded task. An available agent can pull it into an isolated branch.</p></div><button class="icon-button dialog-close" type="button" aria-label="Close">×</button></div>
+    <label>Title<input id="work-item-title" required maxlength="500"></label>
+    <label>Instructions<textarea id="work-item-instructions" rows="6" required></textarea></label>
+    <label>Acceptance criteria <span>(one per line)</span><textarea id="work-item-acceptance" rows="4" required></textarea></label>
+    <label>Owned paths <span>(one relative path per line; blank means the whole project)</span><textarea id="work-item-paths" rows="3" placeholder="src/module.py"></textarea></label>
+    <div class="context-summary" id="work-item-context"></div>
+    <div class="form-error" id="work-item-form-error" role="alert"></div>
+    <div class="dialog-actions"><button class="quiet dialog-close" type="button">Cancel</button><button class="primary" id="create-work-item-submit" type="submit">Add to queue</button></div>
+  </form>
+</dialog>
+
+<dialog id="issue-dialog" aria-labelledby="issue-dialog-title">
+  <form method="dialog" id="issue-form">
+    <div class="dialog-head"><div><h2 id="issue-dialog-title">New issue</h2><p>Record work that needs a decision or resolution.</p></div><button class="icon-button dialog-close" type="button" aria-label="Close">×</button></div>
+    <label>Title<input id="issue-title" required maxlength="200"></label>
+    <label>Details<textarea id="issue-body" rows="7" required></textarea></label>
+    <div class="form-error" id="issue-form-error" role="alert"></div>
+    <div class="dialog-actions"><button class="quiet dialog-close" type="button">Cancel</button><button class="primary" id="create-issue-submit" type="submit">Create issue</button></div>
+  </form>
+</dialog>
+
+<dialog id="debate-dialog" aria-labelledby="debate-dialog-title">
+  <form method="dialog" id="debate-form">
+    <div class="dialog-head"><div><h2 id="debate-dialog-title">Start debate</h2><p>Choose two to five agents. Positions and rebuttals become project history.</p></div><button class="icon-button dialog-close" type="button" aria-label="Close">×</button></div>
+    <label>Question<textarea id="debate-question" rows="5" required></textarea></label>
+    <fieldset><legend>Agents</legend><div class="agent-checks" id="debate-agents"></div></fieldset>
+    <div class="context-summary" id="debate-context-summary"></div>
+    <div class="form-error" id="debate-form-error" role="alert"></div>
+    <div class="dialog-actions"><button class="quiet dialog-close" type="button">Cancel</button><button class="primary" id="create-debate-submit" type="submit">Queue debate</button></div>
+  </form>
+</dialog>
+
+<script src="/projects.js" defer></script>
+</body>
+</html>

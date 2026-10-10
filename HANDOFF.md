@@ -1,117 +1,329 @@
-# Handoff — Litigation (multi-LLM chatroom dashboard)
+# Handoff — Litigation subscription setup
 
-**Date:** 2026-08-18
-**Project root:** `/home/terrabyte/Github-Repositories/Litigation`
-**Status:** Working, self-tested, live-tested. One cleanup item pending (below).
+**Date:** 2026-10-10
+**Project root:** `/mnt/data/projects/Github-Repositories/Litigation`
+**State:** Implemented in the working tree and running locally at
+`http://127.0.0.1:8766`. All five subscription connection checks and a shared
+chat turn passed on 2026-10-10. Changes are uncommitted.
 
-## What this project is
+## Current user route
 
-Litigation is a local web dashboard where multiple LLMs (GPT, Claude, Grok,
-Gemini, OpenRouter, HuggingFace, OpenCode Zen, DeepSeek, Groq, Mistral,
-Together, Fireworks, Perplexity, Cerebras, SambaNova, Novita, Ollama, LM
-Studio) share one chatroom with the user. The user can address one model,
-several, or all; agents can talk to each other using a compact JSON "decoder
-ring" envelope instead of prose; and a "court vote" feature tallies majority /
-confidence / dissent verdicts.
+Run `./start.sh` and open <http://127.0.0.1:8766>. The launcher changes to the
+repository directory and uses `.venv/bin/python`; it does not install global
+packages, create credentials, or modify provider configuration.
 
-**IMPORTANT:** This project is completely separate from the Seam repo
-(`/home/terrabyte/Documents/Projects/Seam`). Do NOT touch Seam for this work.
+The **New chat** dialog refreshes provider state when opened. Its first section
+contains the five requested subscription participants:
 
-## Architecture (all files in project root)
+| Participant | Transport | Billing/setup behavior |
+|---|---|---|
+| Grok | `grok` CLI | Uses the CLI's subscription login. |
+| Gemini (Antigravity) | `agy` CLI | Uses the Google account signed into Antigravity. The UI hides the duplicate `antigravity` alias and presents `gemini`. |
+| GLM | Claude CLI routed to Z.ai | Requires the Z.ai Coding Plan credential in `ZAI_API_KEY`; no API-billing fallback. |
+| Cline | Isolated Cline CLI config with `cline-pass` fixed | Tool categories are disabled and provider/model fallback is rejected. |
+| Claude | `claude` CLI | Uses the Claude subscription login. |
+
+Installed or configured does not mean authenticated. Selectable CLI routes begin
+as `installed_unverified`; the UI never labels them authenticated. Each requested
+subscription row has **Test connection**, which calls
+`POST /api/models/{id}/check` in non-coding mode. The request contains the
+harmless `LITIGATION_OK` probe and succeeds only for that exact reply.
+
+Check state is held only in `server.MODEL_CHECKS` as `verified` or `error` plus
+a UTC timestamp and safe message. No credential, provider response, stderr, or
+raw exception is retained or returned. Restarting the server clears it.
+
+## API and interface facts
+
+- `GET /api/models` returns a safe metadata whitelist: identity/display fields,
+  `installed`, `configured`, `available`, `setup_status`, `auth_status`,
+  `transport`, `billing`, setup guidance, and the ephemeral connection result.
+- `POST /api/models/{id}/check` accepts `claude`, `grok`, `gemini`, `glm`, and
+  `cline`; `antigravity` is retained as a compatible alias. Unknown IDs and
+  non-subscription providers are rejected without invoking a provider.
+- API and local providers remain in the second dialog section. API routes are
+  marked **API billing** and local servers are marked **Local**.
+- Room transcripts, ring cross-talk, voting, model overrides, and the existing
+  coding workspace flow remain intact.
+- Subscription chat adapters reject coding use when their registry metadata
+  does not support it. In a coding room they can still receive the reviewer
+  prompt without gaining file-editing flags.
+
+## Current verification evidence
+
+On 2026-10-10, direct isolated CLI smokes returned the expected sentinel for
+Claude Pro, Grok OAuth, GLM Coding Plan, Cline Pass, and Gemini through
+Antigravity. This establishes the underlying account/CLI routes at that time.
+After restarting with the final adapters, all five
+`POST /api/models/{id}/check` calls passed. The initial two-message echo probe
+was rejected by some models; the final check uses a single natural user prompt
+and still requires the exact sentinel response.
+
+The saved **Subscription room** contains Grok, Gemini (Antigravity), GLM, Cline,
+and Claude with ring cross-talk off. A normal greeting turn streamed replies
+from all five, emitted `turn_done`, and reported no errors. Antigravity took
+about 50 seconds in the final checks; the other providers completed sooner.
+The existing nine rooms and twelve messages were preserved before adding the
+starter room and its greeting exchange.
+
+All 17 focused provider/API tests and the existing isolated self-test passed.
+Desktop and mobile browser checks confirmed all five verified badges and no
+horizontal overflow in the setup dialog. Runtime logs are retained under
+`~/.local/state/litigation/`; Cline session logs are retained separately by its
+adapter. The browser was opened to the running dashboard.
+
+## Files in this change
 
 | File | Purpose |
 |---|---|
-| `server.py` | FastAPI app. Endpoints: `GET /api/models`, `GET/POST /api/rooms`, `GET/PATCH/DELETE /api/rooms/{id}`, `POST /api/rooms/{id}/send` (SSE stream: `start`/`delta`/`done`/`error`/`phase`/`ring`/`turn_done` events), `POST /api/rooms/{id}/vote`. Turn orchestration in `_run_turn()`: parallel fan-out to targeted agents via asyncio queue + sentinel, then optional cross-talk round. Serves `index.html` at `/`. |
-| `providers.py` | Registry of 18 providers (`BASE_REGISTRY`). Three wire adapters: `_stream_openai` (OpenAI-compatible chat/completions), `_stream_anthropic` (Messages API), `_stream_responses` (OpenAI Responses API — used by OpenCode Zen, endpoint `https://opencode.ai/zen/v1/responses`, verified against their docs). Availability = env key set (local servers with `env_key: ""` are always "available"). Extra providers can be added at runtime via `LITIGATION_EXTRA_MODELS` env var (JSON array). |
-| `ring.py` | Decoder ring: `make_envelope`/`encode`/`decode` (tolerant — strips code fences, extracts `{...}`), `estimate_tokens` (~len/4), `tally` (majority/counts/mean_confidence/unanimous/votes/dissent). |
-| `db.py` | SQLite (WAL) persistence: `rooms` + `messages` tables, thread-locked. |
-| `index.html` | Single-file dark courtroom UI, vanilla JS, no build step. Sidebar room list, new-room modal with per-model checkboxes + model override inputs, addressing chips above composer, ring toggle (`crosstalk-btn`), "⚖ Call vote" button, SSE reader in `send()`, verdict cards, ring message bubbles with raw-envelope viewer. |
-| `run_selftest.py` | Unit self-tests for ring/db/providers. Run with `.venv/bin/python run_selftest.py` — all pass. |
-| `.env.example` | All 16 key env vars + model override docs. NO real keys stored in the repo. |
-| `.venv/` | Python venv with fastapi, uvicorn, httpx, python-dotenv. |
+| `providers.py` | Subscription registry metadata and isolated CLI transports. |
+| `server.py` | Safe model metadata, in-memory check state, and connection-check route. |
+| `index.html` | Subscription-first provider picker, state labels, setup hints, and connection checks. |
+| `start.sh` | Repository-local launcher. |
+| `README.md` | User setup and subscription account routing. |
+| `tests/test_providers.py` | Provider CLI isolation and registry checks. |
+| `tests/test_server_models.py` | Isolated API checks with provider completion mocked. |
 
-## How to run
+## Verification boundary
 
-```bash
-cd /home/terrabyte/Github-Repositories/Litigation
-source .venv/bin/activate
-cp .env.example .env   # fill keys as desired (user has OPENAI + ANTHROPIC in ambient env)
-python server.py       # http://127.0.0.1:8766
-```
+Unit and route tests mock provider completion and therefore establish API
+behavior, exact-reply handling, and non-disclosure behavior only. A provider is
+live for this server session only after its UI connection check reports
+**Verified now**. Do not infer current authentication from installation,
+registry metadata, earlier handoffs, or an old server process.
 
-## Environment facts
+## Projects and local agent handoffs — 2026-10-10 continuation
 
-- User's ambient environment already has `OPENAI_API_KEY` and
-  `ANTHROPIC_API_KEY` set (providers gpt/claude show `available: true`
-  without a `.env`). Grok/Gemini/everything else currently `False`.
+The new **Projects** section is implemented and running at
+<http://127.0.0.1:8766/projects>. It supports tracked issues and comments,
+durable handoffs, linked follow-ups and retries, saved outputs, two-round model
+debates, local exports, and reviewed code proposals. The CLI entry point is
+`python3 litigation_cli.py --help`; details are in `docs/PROJECTS.md`.
 
-## What was verified live
+Project records live separately from chat rooms, by default under
+`~/.local/share/litigation/projects/`. SQLite UPDATE/DELETE triggers protect
+append-only records; current state is projected from events. Context snapshots
+include selected files and hashes, issue history, parent receipts, and linked
+outputs. Restart recovery preserves completed work and marks interrupted calls
+without silently replaying them. These are application-level preservation
+rules, not protection against an administrator replacing the database.
 
-1. `import server` clean; `run_selftest.py` passes (ring decode/tally, db
-   CRUD, 18-provider registry, api-type assertions).
-2. Server boot, `GET /api/models`, room create, real SSE send to GPT
-   (`"Reply with exactly: OK"` → streamed `delta` "OK" → `done` →
-   `turn_done`), room delete. Test DB artifacts were removed afterward.
+Code handoffs use the existing subscription routes without unrestricted shell
+execution. Agents return file proposals; the controller validates them and
+commits them in retained `codex/<handoff-id>` worktrees. Main changes only after
+explicit Apply, with clean-tree, expected-base, and fast-forward checks. Git
+uses no remote, hooks, signing, external diff, text conversion, or network
+transport. Import copies only supported committed local HEAD files and records
+exclusions. Provider inference still uses the providers' online services.
 
-## PENDING ITEM (the one thing to do next)
+### Live acceptance receipts
 
-**A stale server process is still running and must be killed:**
+The saved **Local Agent Workshop** project is
+`project_b1f2e00d3e1e4445aa1bd9e1d9acb2aa`:
 
-- PID **357619** — `.venv/bin/python server.py` from the earlier test session,
-  still bound to `127.0.0.1:8766`. It is running the OLD 4-provider code
-  (started before the 18-provider registry update). A second start attempt
-  failed with "address already in use" (log: `/tmp/litigation.log`).
-- Action: `kill 357619` (verify with `ss -tlnp | grep 8766`), then restart:
-  `cd /home/terrabyte/Github-Repositories/Litigation && .venv/bin/python server.py`
-- Also: a test room `97dbe6dfc68f` ("GPT + Claude", crosstalk on) was created
-  against that old server and may still exist in `litigation.db` — delete it
-  via the UI or `DELETE /api/rooms/97dbe6dfc68f`, or just remove
-  `litigation.db*` if the user doesn't care about test data.
+- Claude code handoff `9e15e5f9a06841cd8b164154f092bae3` produced `greeting.py`
+  and `README.md` as a retained proposal.
+- GLM handoff `fd9047af58034ae9885a0d2c8704ce9e` reviewed the actual linked
+  output and tracked issue and returned an approval with no executed-check claim.
+- The browser's Apply action advanced local main to
+  `a442a564c94146206a1ade55a5aa737aa7231de6`; the repo is clean and has zero
+  remotes. The example code was statically reviewed; its tests were not run.
+- Grok and Cline each completed an initial position and rebuttal in debate
+  `debate_c168a927c4a15074ab7a014325b8c469`. A concurrent recovery pass appended
+  two initial-queued receipts pointing to the same tasks; no duplicate model
+  jobs were created, and the UI deduplicates those references.
+- Gemini through Antigravity completed UI-created handoff
+  `8e9c7bc5d2b7488e8b1a618239944323`.
+- All seven handoffs, their outputs, the applied proposal, and the closed
+  demonstration issue survived server restart. A 103,714-byte JSON export was
+  verified at `~/.local/share/litigation/projects/workshop-export-20261010-084807.json`.
+  Exports include history, snapshots, outputs, and diffs; the full repository
+  working tree is not separately bundled.
 
-## Verification checklist for the next agent
+### Qualification and owning files
 
-After killing PID 357619 and restarting:
-1. `curl -s http://127.0.0.1:8766/api/models | python3 -m json.tool` should
-   list **18** providers (previously the stale process returned only 4 —
-   that's how we detected it).
-2. Create a room with gpt + claude (both have keys), send a message, confirm
-   both stream replies. Toggle Ring on, send again, confirm `ring` SSE events
-   arrive and ring messages render as dashed bubbles.
-3. Call a vote; confirm verdict card renders with counts/majority.
+The final Python suite passed **52 tests**, including immutable records and
+REPLACE rejection, stable idempotent replay, context snapshots, cancellation,
+restart recovery, debate peer failure, bounded export, secret-shaped export
+rejection, path validation, literal Git pathspecs, hook suppression, proposal
+isolation, and stale/dirty apply rejection. The existing self-test passed in
+isolated room/project databases. JavaScript syntax and whitespace checks passed.
+Live browser checks covered creating a handoff, opening a code proposal,
+applying it, and opening a debate rebuttal's saved output. Desktop (1440px),
+tablet (780px), and mobile (390px) layouts have no document-level horizontal
+overflow. Final rendered screenshots are saved under
+`/home/terrabyte/.codex/visualizations/2026/10/10/01a125ee-d442-7691-8e99-b9015fab8c4a/`
+as `litigation-projects-desktop.png` and `litigation-projects-mobile.png`.
 
-## Design decisions / context
+New implementation: `project_store.py`, `local_git.py`, `project_runtime.py`,
+`project_routes.py`, `litigation_cli.py`, `projects.html`, `projects.css`, and
+`projects.js`, with matching tests and `docs/PROJECTS.md`. Existing subscription
+setup and unrelated working-tree material remain uncommitted and preserved.
 
-- "Cline", "Claude Code", "Codex CLI" are agent harnesses, not chat-completion
-  APIs — they can't join as chat participants. Their underlying models join
-  via provider keys. This is documented in README.
-- OpenCode Zen uses the OpenAI **Responses API**, not chat/completions — hence
-  the third adapter. Verified against https://opencode.ai/docs/zen/.
-- HuggingFace router: `https://router.huggingface.co/v1`, key `HF_TOKEN`,
-  model names like `deepseek-ai/DeepSeek-R1:fastest` (`:fastest`/`:cheapest`/
-  `:preferred` suffixes). Verified against HF Inference Providers docs.
-- Default models are reasonable current picks; every provider has a
-  `<PREFIX>_MODEL` env override, and the new-room modal has per-model
-  override text inputs.
-- DB stores `raw` envelope JSON alongside decoded text for ring messages and
-  vote tallies so history re-renders correctly.
-- `HISTORY_TURNS = 24` context window per turn; cross-talk capped at 700
-  max_tokens per agent.
+## 2026-10-10 — Coding agents, shared rules, and Alpine SEAM
 
-## Suggested skills
+The Projects page now supports **Coding agent · tools + tests** (`mode=agent`).
+All six subscription routes have completed live file edits and actual sandboxed
+tests: Claude, OpenAI through ChatGPT-authenticated Codex, Grok, GLM, Gemini
+through Antigravity, and Cline Pass. This supplements the earlier proposal-only
+`mode=code` workflow. Use `docs/CODING_AGENTS.md` for the tool protocol and CLI.
 
-- If continuing feature work in this conversation's style, invoke the
-  `implement` or `prototype` skills for the next feature.
-- Use `review-pr` / `code-review` skills before pushing to GitHub if the user
-  asks to publish (repo is not yet git-initialized: no `.git` in the project
-  dir).
-- If the user wants more provider integrations or design changes, `grill-me`
-  or `to-spec` can help pin down requirements first.
+Each task retains its own `codex/<handoff-id>` local branch and worktree.
+Automatic peer handoffs inherit the parent's committed tip and preserve the
+original integration base. The controller records file content/hash receipts,
+real test subprocess results, rule snapshots, outputs, and delegation history.
+Passing tests must match the current tree; subsequent edits invalidate them.
+Explicit Apply validates the full cumulative diff before fast-forwarding main.
+No GitHub service or Git remote is required.
 
-## Not yet done (ideas the user may want)
+### Live coding acceptance
 
-- `git init` + initial commit (user hasn't asked yet; folder lives in
-  `~/Github-Repositories` which suggests they will).
-- Grok/Gemini keys not yet provided by user — those agents show offline.
-- Could add: model discovery via `GET /v1/models` per provider for a model
-  picker dropdown; multi-round cross-talk with a turn budget.
+The persistent **Coding Agent Workshop** is
+`project_781460db04d14e7e864ddc304d7ebbf6`, with issue
+`9bee54b481d54cfcbde3aa3dc614d8e3`.
 
+| Route | Completed handoff | Actual test result |
+| --- | --- | --- |
+| Claude | `80ddcaf2be4242588c88b3e5928f4118` | Intentional failure, repair, then 1 passing test |
+| OpenAI | `104543833bc24351a344d36fcd530b0d` | Automatic peer child; added negative-number coverage; 2 passing tests |
+| Grok | `7112ff62eec14018994786dac95a97d3` | Added edge-case test file; 3 passing tests |
+| GLM | `af826d709c5b438089ee58d00ae91eb5` | Added edge-case test file; 3 passing tests |
+| Gemini / Antigravity | `45a637614a864ead92ad50bd93625d38` | Added edge-case test file; 3 passing tests |
+| Cline Pass | `0e347ab3539b423dbc2c1c181597c7f4` | Added edge-case test file; 3 passing tests |
+
+The browser's Apply action applied the OpenAI cumulative proposal
+`b1ba33a3d72c418e95d31bf7c2b3fe3d`, advancing local main through Claude's
+`91de06fb9acb98bf34cffccd5f60a40760b8cb1b` to OpenAI's
+`d27394428d5a97f298099b96e69675b5db3931a4`. The demonstration main was clean
+and had zero remotes after Apply. Other agents' proposals remain separate.
+
+Original unsuccessful GLM, Cline, and Gemini attempts remain in history, linked
+to their retries. GLM exposed malformed action JSON; the controller now records
+a protocol-error hash/receipt and requests correction within its existing
+round/transcript/time bounds. Cline confused controller action names with native
+tools; its coding prompt now requests literal controller JSON while ordinary
+chat stays free-form. Antigravity's 90-second inner timeout was insufficient;
+the verified retry used 180 seconds internally and 240 seconds externally.
+
+### Rules and knowledge
+
+`/rules` indexes Global, Claude, OpenAI, GLM, Gemini, Cline, and Grok. Published
+revisions and proposal decisions are append-only, with stale-revision checks.
+Project handoffs capture immutable global/model rule snapshots. Ordinary chat,
+cross-talk, and voting receive active rules; unknown providers receive Global.
+Agents may propose improvements only to their own section and cannot activate
+them. Claude's evidence-linked proposal `104f60fd0f4343f08bfbb784f4cf735a` is
+pending review; active Global and Claude rules remain revision 1.
+
+`/knowledge` connects over private SSH to `Ex0@100.126.138.102` (Tailscale name
+Alpine; verified Alpine Linux 3.24.1). The dedicated installation is under
+`~/.local/share/litigation-seam/` on that host. SEAM Suite `2.4.1rc1` was built
+from a clean archive of committed source
+`8530717d800d397ba58283710b6e8f0a037aabf8`; this is private plumbing, not a
+release-qualified artifact. The existing dirty SEAM checkout was not changed.
+Ingestion, project-scoped search, and knowledge-graph traversal work. Reasoning
+graph workflows and semantic embeddings are explicitly **not configured**.
+
+The bridge keeps an append-only local outbox and retry receipts before SSH
+delivery, with immutable event provenance and project namespace checks.
+Delivery is at least once; a remote crash between SEAM ingestion and receipt
+creation can cause redelivery. See `docs/SEAM.md` for installation and recovery.
+
+### Verification and limits
+
+The final isolated suite passed **93/93 tests**, including malformed-turn
+recovery, branch inheritance, crash reconciliation, rule concurrency and
+immutability, sandbox limits/cancellation, current-tree test qualification,
+SEAM provenance, and room rule coverage. Python compilation, JavaScript/shell
+syntax, and `git diff --check` passed. Desktop and 390px mobile browser checks
+verified Projects, Rules, and live Knowledge results without horizontal overflow.
+
+Tests use fixed Python unittest/pytest and Node profiles with installed runtime
+dependencies; arbitrary shell commands and dependency installation are not
+provided. Test subprocesses have no network or host home. Git remains local;
+subscription inference requires provider network access. Antigravity uses
+plan+sandbox but its CLI cannot fully disable installed user plugins, as recorded
+in its provider limitations. Append-only protections are application/database
+invariants, not protection against an administrator replacing files.
+
+The source changes remain in this working tree, uncommitted. Existing project
+data, unrelated files, old attempts, logs, and retained worktrees are preserved.
+
+### Final restart and export receipt
+
+The pre-restart project database receipt was recovered unchanged: 2 projects,
+2 issues, 16 handoffs, 16 outputs, 7 proposals, and 106 project events. All six
+successful subscription coding handoffs remained `completed`, while the three
+original GLM, Gemini, and Cline attempts remained `failed` in append-only
+history. The workshop repository remained clean on local `main` at
+`d27394428d5a97f298099b96e69675b5db3931a4` with no configured remotes.
+
+Issue `9bee54b481d54cfcbde3aa3dc614d8e3` was closed by event 107 with the actual
+six-route acceptance result. A complete JSON export was written through the API
+to `~/.local/share/litigation/projects/coding-workshop-export-20261010.json` and
+parsed successfully: 1 issue, 9 handoffs, 9 outputs, 6 proposals, and 74
+project-scoped events, with the demonstration issue closed and both completed
+and failed handoff history retained.
+
+SEAM synchronized the closure event and reported 39 delivered outbox entries,
+zero pending, and zero rejected. Project-scoped search and graph requests both
+returned namespace
+`litigation.project.project_781460db04d14e7e864ddc304d7ebbf6` with live
+results. Reasoning graph workflows and semantic embeddings remain not
+configured.
+
+At the final read-only process check, the healthy loopback service on port 8766
+was owned by PID 1896079. `/tmp/litigation-projects-server.json` still recorded
+PID 1898220, but that process no longer existed, so the metadata was stale. The
+server was not restarted during this closeout.
+
+After the live PID was independently confirmed, the temporary server metadata
+was atomically corrected to PID 1896079 with log path `/tmp/litigation.log`.
+
+### Shared agent room and navigation acceptance
+
+Projects now includes an **Agent room** backed by the append-only work ledger.
+It shows queued, claimed, running, completed, and blocked work with its owner,
+owned paths, linked handoff, active agent progress, and an explicit local
+provenance check. A bounded work form creates queue items, while **Pull work**
+selects a subscription agent and optional model before the runtime enforces the
+claim and isolated handoff.
+
+The live shared-ledger item `4c4b9d9f1f514855841f1b509e882fa0` was claimed
+by Grok through handoff `4f6cb51940a04dc98f64435471e849f4`. Grok listed
+work, read the inherited files, ran two passing tests, and finished without
+editing files. The work item reached `completed`. Replaying the same pull
+request returned the same handoff, while a competing OpenAI pull received 409.
+The Agent room provenance check reported SQLite `ok` with append-only
+relationships intact.
+
+Chat, Projects, Rules, and Knowledge now use the same top navigation, active
+page marker, and **New chat** action. The New chat action was exercised from
+Knowledge and opened the existing chat-room dialog. Each page was checked at
+1440px and 390px with the correct active marker and no document-level
+horizontal overflow. Agent room captures are
+`litigation-agent-room-desktop.png` and `litigation-agent-room-mobile.png` in
+the session visualization directory.
+
+The integrated suite passed 100 tests after the work-ledger changes; the
+export adjustment and its 10 focused tests also passed before this UI closeout.
+JavaScript syntax, parsed navigation structure, static asset routes, and
+`git diff --check` passed after the final UI changes.
+
+### Final integrated verification
+
+The complete isolated suite was rerun after the export and final UI changes:
+**100 tests passed**, zero failures or errors. The final source was reloaded;
+the loopback service is healthy and the shared work claim remains completed.
+The updated export at
+`~/.local/share/litigation/projects/coding-workshop-ledger-export-20261010.json`
+is 382,112 bytes and contains 10 handoffs plus the complete shared-work intent
+and claim history. The original export was retained.
+
+Global rules revision 2 was published with explicit ledger inspection,
+exclusive shared-work claims, path ownership, and recovery requirements.
+Previous handoffs retain their original revision-1 snapshots. The live local
+provenance report has no failed checks; it explicitly marks proposal ancestry
+as unverified by that report (ancestry remains enforced when proposals are
+created/applied). Local relation/hash checks do not establish cryptographic
+provider identity or protect against an administrator rewriting storage.

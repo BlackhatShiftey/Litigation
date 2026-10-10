@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Litigation · Knowledge</title>
+  <link rel="stylesheet" href="/seam.css">
+  <link rel="stylesheet" href="/shared-nav.css">
+  <script src="/shared-nav.js" defer></script>
+</head>
+<body>
+  <header class="litigation-nav">
+    <a class="litigation-nav__brand" href="/"><span aria-hidden="true">⚖</span>Litigation</a>
+    <nav class="litigation-nav__tabs" aria-label="Workspace sections">
+      <a href="/">Chat</a><a href="/projects">Projects</a><a href="/rules">Rules</a>
+      <a href="/knowledge" aria-current="page">Knowledge</a>
+    </nav>
+    <div class="litigation-nav__actions"><span id="connection" class="litigation-nav__status badge neutral">Checking Alpine</span><a class="litigation-nav__new" href="/?new=1">New chat</a></div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">ALPINE · PRIVATE TAILSCALE LINK</p>
+        <h1>Project knowledge, with provenance.</h1>
+        <p>Completed work, issues, and code proposals flow into a dedicated SEAM instance. The local outbox keeps a receipt before any remote delivery attempt.</p>
+      </div>
+      <button id="sync">Sync now</button>
+    </section>
+
+    <section class="status-grid" aria-label="SEAM capabilities">
+      <article><span>Ingest</span><strong id="cap-ingest">—</strong></article>
+      <article><span>Knowledge search</span><strong id="cap-search">—</strong></article>
+      <article><span>Knowledge graph</span><strong id="cap-graph">—</strong></article>
+      <article><span>Reasoning graph</span><strong id="cap-reasoning">Not configured</strong></article>
+      <article><span>Semantic embeddings</span><strong id="cap-embeddings">Not configured</strong></article>
+    </section>
+
+    <section class="workspace">
+      <aside>
+        <label for="project">Project namespace</label>
+        <select id="project"></select>
+        <div class="namespace" id="namespace">Select a project</div>
+        <h2>Delivery ledger</h2>
+        <dl>
+          <div><dt>Delivered</dt><dd id="delivered">0</dd></div>
+          <div><dt>Pending</dt><dd id="pending">0</dd></div>
+          <div><dt>Rejected safely</dt><dd id="rejected">0</dd></div>
+        </dl>
+        <button id="retry" class="secondary">Retry pending</button>
+      </aside>
+
+      <section class="query-panel">
+        <form id="query-form">
+          <label for="query">Search project memory</label>
+          <div class="query-row">
+            <input id="query" required maxlength="4000" placeholder="What did the agents decide about test isolation?">
+            <button type="submit">Search</button>
+            <button id="graph" type="button" class="secondary">Trace graph</button>
+          </div>
+        </form>
+        <div id="message" role="status"></div>
+        <div id="results" class="results" aria-live="polite">
+          <div class="empty">Choose a project and search its SEAM namespace.</div>
+        </div>
+      </section>
+    </section>
+
+    <section class="ledger-panel">
+      <div class="section-title"><h2>Recent outbox records</h2><span>Append-only local receipts</span></div>
+      <div id="outbox" class="outbox"></div>
+    </section>
+  </main>
+  <script src="/seam.js"></script>
+</body>
+</html>
