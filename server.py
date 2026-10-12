@@ -70,7 +70,9 @@ CROSSTALK_MAX_TOKENS = 700  # keep cross-talk envelopes cheap
 # A connection check is intentionally ephemeral: it records only a result and
 # timestamp, never credentials, command output, or a provider response.
 MODEL_CHECKS: dict[str, dict[str, str]] = {}
-CHECKABLE_SUBSCRIPTIONS = {"claude", "grok", "gemini", "antigravity", "glm", "cline", "openai"}
+CHECKABLE_SUBSCRIPTIONS = {
+    "claude", "grok", "gemini", "antigravity", "glm", "cline", "openai", "astra",
+}
 
 RING_SPEC = (
     "When agents address EACH OTHER in this chat they use the 'ring': a compact "
@@ -111,6 +113,28 @@ REVIEW_SPEC = (
 
 def _label_map(participants: list[dict[str, Any]]) -> dict[str, str]:
     return {p["id"]: p.get("label", p["id"]) for p in participants}
+
+
+def _participant_agent(participant: dict[str, Any]) -> dict[str, Any]:
+    """Resolve persisted room state through the current provider policy."""
+    return providers.resolve_agent(
+        str(participant.get("id") or ""),
+        str(participant.get("model") or "") or None,
+    )
+
+
+def _clean_participant(participant: dict[str, Any]) -> dict[str, str]:
+    """Validate a new roster entry without changing its transcript identity."""
+    agent_id = str(participant.get("id") or "")
+    agent = providers.resolve_agent(
+        agent_id,
+        str(participant.get("model") or "") or None,
+    )
+    return {
+        "id": agent_id,
+        "label": str(agent.get("label") or agent_id),
+        "model": str(agent.get("model") or ""),
+    }
 
 
 def _room_system(agent_id: str, participants: list[dict[str, Any]]) -> str:
@@ -285,6 +309,19 @@ def _model_check_result(model_id: str, status: str, message: str) -> dict[str, A
     return result
 
 
+def _safe_connection_failure(exc: BaseException, hint: str) -> str:
+    """Preserve actionable subscription failure categories without raw output."""
+    if isinstance(exc, providers.ProviderError):
+        category = str(exc).lower()
+        if "authentication is required" in category or "authentication is no longer supported" in category:
+            return f"Authentication failed. {hint}"
+        if "subscription quota is unavailable" in category:
+            return "Subscription quota is unavailable. Retry after the provider quota resets."
+        if "selected model is unavailable" in category:
+            return "The selected subscription model is unavailable. Choose another model and retry."
+    return f"Connection failed. {hint}"
+
+
 @app.post("/api/models/{model_id}/check")
 async def check_model(model_id: str) -> dict[str, Any]:
     if model_id not in CHECKABLE_SUBSCRIPTIONS:
@@ -316,9 +353,11 @@ async def check_model(model_id: str) -> dict[str, Any]:
             temperature=0,
             coding=False,
         )
-    except Exception:  # provider adapters sanitize internally; do not expose exception text here
+    except Exception as exc:  # provider adapters sanitize; return category, never raw output
         hint = agent.get("setup_hint") or "Check the provider login, then try again."
-        return _model_check_result(model_id, "error", f"Connection failed. {hint}")
+        return _model_check_result(
+            model_id, "error", _safe_connection_failure(exc, str(hint))
+        )
 
     if reply.strip() != "LITIGATION_OK":
         return _model_check_result(
@@ -338,14 +377,12 @@ def rooms() -> list[dict[str, Any]]:
 def create_room(body: RoomCreate) -> dict[str, Any]:
     if not body.participants:
         raise HTTPException(status_code=400, detail="a room needs at least one participant")
-    known = {e["id"]: e for e in providers.registry()}
     cleaned = []
     for p in body.participants:
-        entry = known.get(str(p.get("id", "")))
-        if not entry:
-            raise HTTPException(status_code=400, detail=f"unknown participant: {p.get('id')}")
-        cleaned.append({"id": entry["id"], "label": entry["label"],
-                        "model": str(p.get("model") or entry["model"])})
+        try:
+            cleaned.append(_clean_participant(p))
+        except providers.ProviderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
     title = body.title.strip() or " + ".join(p["label"] for p in cleaned)
     workspace = body.workspace.strip()
     if workspace:
@@ -387,19 +424,24 @@ async def patch_room(room_id: str, body: dict[str, Any]) -> dict[str, Any]:
         requested = body.get("participants") or []
         if not requested:
             raise HTTPException(status_code=400, detail="a room needs at least one participant")
-        known = {e["id"]: e for e in providers.registry()}
         existing = {p["id"]: dict(p) for p in room["participants"]}
         cleaned = []
         for p in requested:
-            entry = known.get(str(p.get("id", "")))
-            if not entry:
-                raise HTTPException(status_code=400,
-                                    detail=f"unknown participant: {p.get('id')}")
-            current = existing.get(entry["id"], {})
-            cleaned.append({
-                "id": entry["id"], "label": entry["label"],
-                "model": str(p.get("model") or current.get("model") or entry["model"]),
-            })
+            agent_id = str(p.get("id") or "")
+            current = existing.get(agent_id, {})
+            candidate = {**p, "model": p.get("model") or current.get("model")}
+            try:
+                cleaned.append(_clean_participant(candidate))
+            except providers.ProviderError as exc:
+                requested_model = str(p.get("model") or "")
+                current_model = str(current.get("model") or "")
+                if current and (not requested_model or requested_model == current_model):
+                    # A legacy room may contain a provider that current policy
+                    # blocks. Keep its unchanged roster record so valid counsel
+                    # can still be added or removed; dispatch remains fail-closed.
+                    cleaned.append(current)
+                    continue
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
         updates["participants"] = cleaned
     DB.update_room(room_id, **updates)
     return DB.get_room(room_id)  # type: ignore[return-value]
@@ -451,12 +493,11 @@ async def _run_turn(room: dict[str, Any], targets: list[dict[str, Any]],
     labels = _label_map(room["participants"])
 
     async def worker(p: dict[str, Any]) -> AsyncIterator[dict[str, Any]]:
-        agent = providers.get_agent(p["id"]) or {}
-        agent = {**agent, "model": p.get("model") or agent.get("model", "")}
-        is_harness = agent.get("api") == "cli" and agent.get(
-            "supports_coding", bool(agent.get("cli_coding_flags")))
         yield {"type": "start", "agent": p["id"], "label": p.get("label", p["id"])}
         try:
+            agent = _participant_agent(p)
+            is_harness = agent.get("api") == "cli" and agent.get(
+                "supports_coding", bool(agent.get("cli_coding_flags")))
             before = await _head_ref(workspace) if coding and is_harness else ""
             chunks: list[str] = []
             async for delta in providers.stream_completion(
@@ -528,9 +569,8 @@ async def _run_turn(room: dict[str, Any], targets: list[dict[str, Any]],
                 + "\n\n".join(others)
                 + "\n\nRespond to them now using the ring envelope."
             )
-            agent = providers.get_agent(p["id"]) or {}
-            agent = {**agent, "model": p.get("model") or agent.get("model", "")}
             try:
+                agent = _participant_agent(p)
                 raw = await providers.complete(
                     agent,
                     [{"role": "system", "content": _room_system(p["id"], room["participants"])},
@@ -567,8 +607,6 @@ async def vote(room_id: str, body: VoteBody) -> dict[str, Any]:
     labels = _label_map(room["participants"])
 
     async def one(p: dict[str, Any]) -> dict[str, Any]:
-        agent = providers.get_agent(p["id"]) or {}
-        agent = {**agent, "model": p.get("model") or agent.get("model", "")}
         transcript = "\n".join(
             f"{'Human' if m['sender'] == 'user' else labels.get(m['sender'], m['sender'])}: {m['content']}"
             for m in history[-HISTORY_TURNS:]
@@ -577,6 +615,7 @@ async def vote(room_id: str, body: VoteBody) -> dict[str, Any]:
             f"Room transcript so far:\n{transcript}\n\nMotion to decide: {question}\n\n{VOTE_SPEC}"
         )
         try:
+            agent = _participant_agent(p)
             raw = await providers.complete(
                 agent,
                 [{"role": "system", "content": _room_system(p["id"], room["participants"])},

@@ -6,10 +6,11 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
 
 // Mirrors the server's CHECKABLE_SUBSCRIPTIONS; the alias `antigravity` is
 // hidden in favor of `gemini`.
-const CHECKABLE = new Set(["claude", "grok", "gemini", "glm", "cline", "openai"]);
+const CHECKABLE = new Set(["claude", "grok", "gemini", "glm", "cline", "openai", "astra"]);
 const SUBSCRIPTION_ORDER = ["grok", "gemini", "glm", "cline", "claude", "openai", "astra"];
 
 const state = { setup: null, models: [] };
+const subscriptionOnly = () => !state.setup || state.setup.subscription_only !== false;
 
 const api = {
   async json(url, opts = {}) {
@@ -44,7 +45,7 @@ function modelStatus(m) {
     configured_unverified: "Configured · not verified",
     not_installed: "Not installed",
     not_configured: "Setup needed",
-    safety_blocked: "Held unavailable",
+    safety_blocked: "Policy blocked",
   };
   return [labels[m.setup_status] || "Not verified", ""];
 }
@@ -52,6 +53,16 @@ function modelStatus(m) {
 function renderSetupState() {
   const box = $("setup-state");
   const s = state.setup;
+  if (subscriptionOnly()) {
+    const subscriptions = state.models.filter((m) =>
+      m.billing === "subscription" && m.id !== "antigravity");
+    const available = subscriptions.filter((m) => m.available).length;
+    box.innerHTML =
+      '<div class="current">Subscription accounts automatic</div>' +
+      `<div class="counts">${available} of ${subscriptions.length} account route${subscriptions.length === 1 ? "" : "s"} available · existing CLI sign-ins are used automatically</div>` +
+      (s && s.store_error ? `<p class="warn">${esc(s.store_error)}</p>` : "");
+    return;
+  }
   const firstRun = s ? s.first_run : false;
   const keyCount = (s ? s.api_keys : []).filter((k) => k.set).length;
   const credCount = (s ? s.subscription_credentials : []).filter((k) => k.set).length;
@@ -62,6 +73,25 @@ function renderSetupState() {
     `${credCount} subscription credential${credCount === 1 ? "" : "s"} · ` +
     `${locals} local server${locals === 1 ? "" : "s"} running</div>` +
     (s && s.store_error ? `<p class="warn">${esc(s.store_error)}</p>` : "");
+}
+
+function renderPolicyMode() {
+  const subscriptionsOnly = subscriptionOnly();
+  $("section-api").hidden = subscriptionsOnly;
+  $("section-local").hidden = subscriptionsOnly;
+  $("zai-key-controls").hidden = subscriptionsOnly;
+  $("setup-eyebrow").textContent = subscriptionsOnly ? "SUBSCRIPTION SETTINGS" : "PROVIDER SETTINGS";
+  $("setup-title").textContent = subscriptionsOnly
+    ? "Subscription accounts."
+    : "Subscriptions, API keys, local models.";
+  $("setup-intro").textContent = subscriptionsOnly
+    ? "Litigation uses the account-backed CLIs already signed in on this installation. Review account status here, then choose subscription counsel when you start or update a chat."
+    : "Configure every provider family here. When you start a chat you can choose subscription models, API models, and local models side by side.";
+  $("h-subscription").textContent = subscriptionsOnly ? "Subscription accounts" : "Subscription models";
+  $("glm-account-label").innerHTML = subscriptionsOnly
+    ? "GLM · Z.ai Coding Plan account"
+    : "GLM · Z.ai Coding Plan credential <code>ZAI_API_KEY</code>";
+  $("finish-setup").textContent = subscriptionsOnly ? "Dismiss setup notice" : "Finish setup";
 }
 
 function renderSubscriptions() {
@@ -89,7 +119,8 @@ function renderSubscriptions() {
          <div class="meta">${esc(m.model || "provider default")} · ${esc(m.transport || "cli")}</div>
        </div>
        <span class="status ${statusClass}">${esc(status)}</span>
-       ${m.setup_hint ? `<div class="hint">${esc(m.setup_hint)}</div>` : ""}
+       ${(m.check_message || m.blocked_reason || m.setup_hint)
+         ? `<div class="hint">${esc(m.check_message || m.blocked_reason || m.setup_hint)}</div>` : ""}
        ${CHECKABLE.has(m.id)
          ? `<div class="actions"><button type="button" class="secondary check" data-id="${esc(m.id)}">Test connection</button></div>`
          : ""}`;
@@ -99,6 +130,19 @@ function renderSubscriptions() {
 
 function renderKeys() {
   const wrap = $("api-keys");
+  const credentials = (state.setup && state.setup.subscription_credentials) || [];
+  const zai = credentials.find((c) => c.env_key === "ZAI_API_KEY");
+  if (subscriptionOnly()) {
+    $("zai-state").innerHTML = zai && zai.set
+      ? '<span class="set">Coding Plan account configured ✓</span> — this installation will use it automatically.'
+      : "Coding Plan account needs login or setup on this installation. No pay-as-you-go key will be requested here.";
+  } else {
+    $("zai-state").innerHTML = zai
+      ? (zai.set
+          ? '<span class="set">Credential set ✓</span> — GLM subscription route is configured.'
+          : "Not set — the GLM route needs this credential even though it is subscription-billed.")
+      : "";
+  }
   const keys = (state.setup && state.setup.api_keys) || [];
   if (!keys.length) {
     wrap.innerHTML = '<div class="hint">No API-key providers are registered.</div>';
@@ -123,13 +167,6 @@ function renderKeys() {
     }
     wrap.appendChild(row);
   }
-  const credentials = (state.setup && state.setup.subscription_credentials) || [];
-  const zai = credentials.find((c) => c.env_key === "ZAI_API_KEY");
-  $("zai-state").innerHTML = zai
-    ? (zai.set
-        ? '<span class="set">Credential set ✓</span> — GLM subscription route is configured.'
-        : "Not set — the GLM route needs this credential even though it is subscription-billed.")
-    : "";
 }
 
 function renderLocalServers() {
@@ -167,6 +204,7 @@ async function refresh() {
   const [setup, models] = await Promise.all([api.setup(), api.models()]);
   state.setup = setup;
   state.models = models;
+  renderPolicyMode();
   renderSetupState();
   renderSubscriptions();
   renderKeys();
@@ -201,7 +239,9 @@ document.addEventListener("DOMContentLoaded", () => {
     try {
       await api.dismiss();
       await refresh();
-      message("Setup finished. Start a chat and pick subscription, API, and local models side by side.", "ok");
+      message(subscriptionOnly()
+        ? "Setup notice dismissed. Subscription accounts remain available automatically."
+        : "Setup finished. Start a chat and pick subscription, API, and local models side by side.", "ok");
     } catch (e) {
       message(e.message, "err");
     }

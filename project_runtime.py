@@ -25,7 +25,9 @@ from rules_store import RulesStore, RulesStoreError, default_rules_db_path
 from test_sandbox import SandboxError, TestSandbox
 
 
-SUBSCRIPTION_AGENTS = frozenset({"grok", "gemini", "glm", "cline", "claude", "openai"})
+SUBSCRIPTION_AGENTS = frozenset(
+    {"grok", "gemini", "glm", "cline", "claude", "openai", "astra"}
+)
 HANDOFF_MODES = frozenset({"analysis", "review", "code", "agent"})
 TERMINAL_STATES = frozenset(
     {"completed", "needs_revision", "failed", "interrupted", "cancelled"}

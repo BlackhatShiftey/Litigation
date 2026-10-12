@@ -305,24 +305,38 @@ class ProviderError(RuntimeError):
     pass
 
 
-def registry() -> list[dict[str, Any]]:
-    """The full model registry with availability resolved.
+SUBSCRIPTION_PROVIDER_IDS = frozenset(
+    {"claude", "grok", "gemini", "glm", "cline", "openai"}
+)
+SUBSCRIPTION_PROVIDER_ALIASES = {
+    "astra": "openai",
+    "antigravity": "gemini",
+    "agy": "gemini",
+    "chatgpt": "openai",
+    "codex": "openai",
+    "gpt": "openai",
+}
+SUBSCRIPTION_REGISTRY_IDS = (
+    "claude", "grok", "gemini", "glm", "cline", "openai", "astra",
+)
 
-    HTTP providers are available when their env var is set and non-empty
-    (for custom local models with no env_key, e.g. plain Ollama, it is True).
-    CLI providers are installed when their binary is on PATH.  That does not
-    prove the cached login is valid, so setup/auth metadata remains explicitly
-    unverified until a caller performs a real request.
+
+def subscription_only() -> bool:
+    """Return whether dispatch is restricted to built-in subscription routes.
+
+    Subscription-only operation is the safe default. Legacy mixed-provider
+    deployments must opt in explicitly with ``LITIGATION_SUBSCRIPTION_ONLY=0``.
     """
-    entries = [dict(e) for e in BASE_REGISTRY]
-    raw = os.environ.get("LITIGATION_EXTRA_MODELS", "").strip()
-    if raw:
-        try:
-            extra = json.loads(raw)
-            if isinstance(extra, list):
-                entries.extend(extra)
-        except json.JSONDecodeError:
-            pass  # a malformed blob must not take the app down
+    return os.environ.get("LITIGATION_SUBSCRIPTION_ONLY", "1").strip() != "0"
+
+
+def _canonical_subscription_id(agent_id: str) -> str | None:
+    canonical = SUBSCRIPTION_PROVIDER_ALIASES.get(agent_id, agent_id)
+    return canonical if canonical in SUBSCRIPTION_PROVIDER_IDS else None
+
+
+def _resolve_availability(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Resolve runtime metadata on a private list of trusted registry entries."""
     for e in entries:
         env_key = e.get("env_key", "")
         if e.get("api") == "cli":
@@ -360,11 +374,88 @@ def registry() -> list[dict[str, Any]]:
     return entries
 
 
+def registry() -> list[dict[str, Any]]:
+    """The full model registry with availability resolved.
+
+    HTTP providers are available when their env var is set and non-empty
+    (for custom local models with no env_key, e.g. plain Ollama, it is True).
+    CLI providers are installed when their binary is on PATH.  That does not
+    prove the cached login is valid, so setup/auth metadata remains explicitly
+    unverified until a caller performs a real request.
+    """
+    if subscription_only():
+        # Select by built-in ID before reading extension metadata. A custom
+        # entry cannot claim subscription billing and enter this allowlist.
+        builtins = {str(e["id"]): e for e in BASE_REGISTRY}
+        entries = [dict(builtins[agent_id]) for agent_id in SUBSCRIPTION_REGISTRY_IDS]
+        for entry in entries:
+            entry["canonical_id"] = (
+                SUBSCRIPTION_PROVIDER_ALIASES.get(str(entry["id"]), str(entry["id"]))
+            )
+        return _resolve_availability(entries)
+
+    entries = [dict(e) for e in BASE_REGISTRY]
+    raw = os.environ.get("LITIGATION_EXTRA_MODELS", "").strip()
+    if raw:
+        try:
+            extra = json.loads(raw)
+            if isinstance(extra, list):
+                entries.extend(extra)
+        except json.JSONDecodeError:
+            pass  # a malformed blob must not take the app down
+    return _resolve_availability(entries)
+
+
 def get_agent(agent_id: str) -> dict[str, Any] | None:
     for entry in registry():
         if entry["id"] == agent_id:
             return entry
+    if subscription_only():
+        canonical = _canonical_subscription_id(agent_id)
+        if canonical:
+            target = next((e for e in registry() if e["id"] == canonical), None)
+            if target:
+                alias = next((e for e in BASE_REGISTRY if e["id"] == agent_id), {})
+                return {
+                    **target,
+                    "id": agent_id,
+                    "label": alias.get("label", target["label"]),
+                    "color": alias.get("color", target["color"]),
+                    "canonical_id": canonical,
+                }
     return None
+
+
+def resolve_agent(agent_id: str, model: str | None = None) -> dict[str, Any]:
+    """Resolve a participant to a dispatch-safe provider descriptor."""
+    agent = get_agent(agent_id)
+    if not agent:
+        if subscription_only():
+            raise ProviderError(
+                f"{agent_id or 'provider'} is unavailable because Litigation is subscription-only"
+            )
+        raise ProviderError(f"unknown provider: {agent_id or '?'}")
+    resolved = dict(agent)
+    # Legacy `gpt` rooms stored an HTTP model such as gpt-4o-mini. The alias
+    # now uses ChatGPT CLI login, where that stale override is incompatible.
+    selected_model = (
+        "" if subscription_only() and agent_id == "gpt"
+        else str(model or "").strip()
+    )
+    resolved["model"] = selected_model or str(agent.get("model") or "")
+    return resolved
+
+
+def _resolve_dispatch_agent(
+    agent: dict[str, Any], model: str | None,
+) -> tuple[dict[str, Any], str]:
+    """Fail closed if an untrusted/non-subscription descriptor reaches I/O."""
+    if not subscription_only():
+        return agent, str(model or agent.get("model") or "")
+    resolved = resolve_agent(str(agent.get("id") or ""), model or str(agent.get("model") or ""))
+    if resolved.get("api") != "cli" or resolved.get("billing") != "subscription":
+        raise ProviderError("provider dispatch is blocked by subscription-only policy")
+    return resolved, str(resolved.get("model") or "")
 
 
 def _resolve_key(agent: dict[str, Any]) -> str:
@@ -678,7 +769,7 @@ async def stream_completion(agent: dict[str, Any], messages: list[dict[str, str]
     harness inside the given workspace directory with auto-approve flags.
     HTTP providers ignore them (they have no file tools on this wire).
     """
-    model = model or agent["model"]
+    agent, model = _resolve_dispatch_agent(agent, model)
     api = agent.get("api", "openai")
     if api == "cli":
         async for delta in _stream_cli(agent, _serialize_prompt(messages),

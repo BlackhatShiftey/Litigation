@@ -1,24 +1,24 @@
 # Litigation ⚖️
 
-A local dashboard where subscription-backed model CLIs, API providers, and
-local models share one chatroom with you. Address one model, a few, or all of
-them, then call a vote and let the whole room decide.
+A local dashboard where subscription-backed model CLIs share one chatroom with
+you. Address one model, a few, or all of them, then call a vote and let the
+whole room decide.
 
 ## Features
 
-- **Multi-model rooms** — pick any combination of providers per chat room,
-  and add more counsel mid-conversation with **+ Counsel** (subscription,
-  API, and local models side by side).
+- **Multi-model rooms** — pick any combination of the six subscription account
+  routes per chat room, and add more counsel mid-conversation with
+  **+ Counsel**.
 - **Selective addressing** — chips above the composer toggle which models hear
   your next message (empty selection = everyone).
 - **Decoder ring ("Ring") cross-talk** — when enabled, after answering you the
   agents address *each other* using a compact JSON envelope
-  (`{"v":1,"from":"gpt","kind":"claim","text":"..."}`) instead of prose.
+  (`{"v":1,"from":"openai","kind":"claim","text":"..."}`) instead of prose.
   Cheaper than NLP, machine-parseable, and the UI can show the raw envelope.
 - **Court votes** — "⚖ Call vote" asks every participant for a verdict
   envelope, then tallies majority, confidence, and dissents into a verdict card.
-- **Streaming** — API providers stream token-by-token over SSE. Subscription
-  CLI replies appear when their isolated command finishes.
+- **Streaming** — provider events stream over SSE. Subscription CLI replies
+  appear when their isolated command finishes.
 - **Persistence** — rooms and transcripts in a local SQLite DB (`litigation.db`).
 - **Durable projects** — share committed local files and tracked issues with
   subscription agents, preserve append-only handoffs and outputs, run bounded
@@ -31,16 +31,13 @@ them, then call a vote and let the whole room decide.
 ./start.sh
 ```
 
-Open <http://127.0.0.1:8766>. A first-run settings page covers the three
-provider families — **subscription logins** (each provider's locally
-signed-in CLI, plus GLM's Z.ai credential), **API keys** (pay-as-you-go,
-stored in a local `0600` file and applied without a restart), and **local
-models** (Ollama / LM Studio with running-status probes and model
-overrides). There is no global billing switch: when you start a chat you
-pick subscription, API, and local participants side by side in the New-chat
-dialog — the choice is per conversation. Headless installs can use
-`litigation setup --set KEY`, `--local-model ollama=llama3.1`, and `--done`.
-Details: [docs/SETUP.md](docs/SETUP.md).
+Open <http://127.0.0.1:8766>. Subscription-only operation is the default. The
+dashboard automatically uses the existing CLI accounts on this installation
+for OpenAI, Grok, Gemini through Antigravity, GLM, Cline, and Claude. New Chat,
+**+ Counsel**, and Settings show those account routes without asking for
+pay-as-you-go API keys or probing local inference servers. There is no paid API
+fallback when an account is unavailable, and normal startup does not block chat
+on first-run key setup. Details: [docs/SETUP.md](docs/SETUP.md).
 
 Click **New chat** and use **Test connection** beside each subscription
 provider. A CLI being installed is shown as **Installed · not verified** until
@@ -81,10 +78,9 @@ litigation new-room -p grok -p claude --crosstalk
 litigation send <id> "address the court" # streams replies live, token by token
 litigation send <id> "review this" --target grok --mode code
 litigation vote <id> "ship or hold?"
-litigation add-model <id> -p grok -p "ollama=llama3.1"  # mid-conversation
+litigation add-model <id> -p grok -p openai           # mid-conversation
 litigation models                        # provider availability + billing
 litigation check claude                  # subscription connection check
-litigation setup --set OPENAI_API_KEY    # headless key/setting management
 ```
 
 The same command also covers the durable Projects workflow (handoffs, debates,
@@ -92,34 +88,49 @@ proposals, shared work) — see `litigation --help`.
 
 ## Subscription accounts
 
-The subscription group in the new-room dialog uses the accounts already
-authenticated by each provider's local CLI. It does not ask for pay-as-you-go
-provider keys.
+The new-room dialog uses the accounts already authenticated by each provider's
+local CLI. It does not ask for pay-as-you-go provider keys and does not switch
+to paid API billing when a CLI account is missing, signed out, over quota, or
+otherwise unavailable.
 
 | Participant | Local route | Setup |
 |---|---|---|
 | OpenAI | Codex CLI using a ChatGPT subscription | Run `codex login`, confirm `codex login status` reports **Logged in using ChatGPT**, then test the connection. Litigation disables the CLI's native shell, plugins, rules, and web search for this route. |
 | Grok | Grok CLI | Run `grok login --oauth`, complete browser sign-in, then test the connection. |
 | Gemini | Antigravity `agy` CLI | Run `agy` and complete its Google account sign-in if prompted. Litigation labels this participant **Gemini (Antigravity)**. |
-| GLM | Claude CLI routed to Z.ai | Use the credential issued by the Z.ai Coding Plan as `ZAI_API_KEY`. This route is labeled subscription billing and does not fall back to a pay-as-you-go provider. |
+| GLM | Claude CLI routed to Z.ai | Uses the existing Z.ai Coding Plan credential from Litigation's private `0600` application store. This is account setup for the Coding Plan route, not a pay-as-you-go API fallback. |
 | Cline | Isolated Cline CLI config with `cline-pass` fixed | Run `cline auth cline-pass` if the login has expired. Litigation disables installed tool categories and prevents a provider/model fallback. |
 | Claude | Claude CLI | Run `claude auth login`, choose the Claude subscription account, then test the connection. |
 
 The check sends only `LITIGATION_OK` in non-coding mode and succeeds only when
 the provider returns that exact text. Installed, configured, and authenticated
-are deliberately separate states.
+are deliberately separate states: finding a CLI binary does not mark its
+account live or verified. Connection checks are manual and their results stay
+only in server memory until restart.
 
-## API and local providers
+Rooms created before subscription-only mode may still store the participant id
+`gpt`. At runtime Litigation routes that legacy id through the canonical OpenAI
+ChatGPT subscription account without rewriting the room roster or transcript.
 
-The second group keeps the existing API and local options. API-backed providers
-are clearly marked **API billing**; they use their documented environment
-variable from `.env`. Local Ollama and LM Studio entries are marked **Local**.
-Every provider still supports its `<PREFIX>_MODEL` override.
+## Optional legacy API and local providers
 
-**Built-in providers** include the six subscription routes above plus GPT,
-OpenRouter, HuggingFace (Inference Providers router), OpenCode Zen, DeepSeek, Groq,
-Mistral, Together, Fireworks, Perplexity, Cerebras, SambaNova, Novita ·
-Ollama and LM Studio (local, no key needed — just leave the server running).
+Other deployments can explicitly restore the older mixed-provider surface with
+`LITIGATION_SUBSCRIPTION_ONLY=0`. Only that legacy opt-in exposes pay-as-you-go
+API key forms and local Ollama or LM Studio entries in Settings, New Chat, and
+**+ Counsel**. Existing stored API credentials and local model overrides are
+left in place when subscription-only mode hides them; the policy does not
+delete account or provider configuration.
+
+In the optional mixed mode, API-backed providers are marked **API billing** and
+use their documented environment variable from `.env`. Local Ollama and LM
+Studio entries are marked **Local**, and providers retain their
+`<PREFIX>_MODEL` overrides. Headless configuration remains available through
+`litigation setup --set KEY`, `--local-model ollama=llama3.1`, and `--done`.
+
+The legacy registry includes the six subscription routes above plus GPT,
+OpenRouter, HuggingFace (Inference Providers router), OpenCode Zen, DeepSeek,
+Groq, Mistral, Together, Fireworks, Perplexity, Cerebras, SambaNova, Novita,
+Ollama, and LM Studio.
 
 Not built in but trivially added: vLLM, llama.cpp server, LiteLLM proxy, and
 any other OpenAI-compatible endpoint — see below. Enterprise gateways

@@ -149,7 +149,7 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
     <span class="pill" id="room-members"></span>
     <button class="topbtn" id="crosstalk-btn" title="Let agents see and reply to each other via the decoder ring">Ring: off</button>
     <button class="topbtn" id="code-btn" title="Coding mode: qualified coding agents edit the shared workspace; chat-only subscription agents review without file access">Code: off</button>
-    <button class="topbtn" id="add-counsel-btn" title="Add models to this room — subscription, API, or local, even mid-conversation">+ Counsel</button>
+    <button class="topbtn" id="add-counsel-btn" title="Add subscription counsel to this room">+ Counsel</button>
     <button class="topbtn" id="vote-btn" title="Ask every participant for a verdict">⚖ Call vote</button>
   </div>
   <div id="chat"></div>
@@ -190,7 +190,7 @@ const state = {
   selected: new Set(), // targeted agent ids for the next message (empty = all)
   busy: false,
   agentColor: {}, agentLabel: {},
-  setup: null,         // {auth_mode: 'subscription'|'api'|'mixed'|'unset'} from /api/setup
+  setup: null,         // includes subscription_only; defaults to subscription-only until loaded
 };
 
 const api = {
@@ -221,7 +221,11 @@ function syncAgentMeta() {
     state.agentLabel[p.id] = p.label || state.agentLabel[p.id] || p.id;
   }
 }
-const colorOf = (id) => state.agentColor[id] || '#8b949e';
+const canonicalProviderId = (id) => ({
+  gpt: 'openai', codex: 'openai', chatgpt: 'openai',
+  antigravity: 'gemini', agy: 'gemini',
+}[id] || id);
+const colorOf = (id) => state.agentColor[id] || state.agentColor[canonicalProviderId(id)] || '#8b949e';
 const labelOf = (id) => state.agentLabel[id] || id;
 
 /* ---------------- Sidebar ---------------- */
@@ -235,7 +239,7 @@ async function refreshRooms() {
     div.className = 'room-item' + (state.room && r.id === state.room.id ? ' active' : '');
     div.innerHTML =
       `<div style="min-width:0"><div class="title">${esc(r.title)}</div>
-       <div class="meta">${r.participants.map(p => esc(p.label)).join(' · ')}</div></div>
+       <div class="meta">${r.participants.map(p => esc(participantDisplay(p))).join(' · ')}</div></div>
        <button class="del" title="Delete room">✕</button>`;
     div.onclick = () => openRoom(r.id);
     div.querySelector('.del').onclick = async (e) => {
@@ -253,14 +257,13 @@ async function refreshRooms() {
 
 // The server's check endpoint accepts exactly these subscription routes;
 // `antigravity` is the hidden alias of `gemini`.
-const CHECKABLE_SUBSCRIPTIONS = new Set(['claude', 'grok', 'gemini', 'glm', 'cline', 'openai']);
+const CHECKABLE_SUBSCRIPTIONS = new Set(['claude', 'grok', 'gemini', 'glm', 'cline', 'openai', 'astra']);
 const SUBSCRIPTION_ORDER = ['grok', 'gemini', 'glm', 'cline', 'claude', 'openai', 'astra'];
 
-// Billing family is a per-conversation choice: every group is always shown
-// and whatever you check joins the room.
 const isSubscriptionBilled = (m) => m.billing === 'subscription';
 const isLocalServer = (m) => !!m.local;
 const isCliTransport = (m) => String(m.transport || '').toLowerCase().includes('cli');
+const subscriptionOnly = () => !state.setup || state.setup.subscription_only !== false;
 
 function providerGroups() {
   const byId = new Map(state.models.map(m => [m.id, m]));
@@ -271,11 +274,14 @@ function providerGroups() {
     ...subscription.filter(m => !SUBSCRIPTION_ORDER.includes(m.id)),
   ];
   const rest = state.models.filter(m => !isSubscriptionBilled(m) && m.id !== 'antigravity');
-  return [
-    ['Subscription models', orderedSubs],
-    ['API models', rest.filter(m => !isLocalServer(m))],
-    ['Local models', rest.filter(isLocalServer)],
-  ];
+  const groups = [['Subscription accounts', orderedSubs]];
+  if (!subscriptionOnly()) {
+    groups.push(
+      ['API models', rest.filter(m => !isLocalServer(m))],
+      ['Local models', rest.filter(isLocalServer)],
+    );
+  }
+  return groups;
 }
 
 async function refreshModels() {
@@ -291,7 +297,7 @@ function modelStatus(m) {
     configured_unverified: 'Configured · not verified',
     not_installed: 'Not installed',
     not_configured: 'Setup needed',
-    safety_blocked: 'Held unavailable',
+    safety_blocked: 'Policy blocked',
   };
   return [labels[m.setup_status] || 'Not verified', m.setup_status === 'safety_blocked' ? 'blocked' : ''];
 }
@@ -355,8 +361,8 @@ function setModalMode(mode) {
   modalMode = mode;
   const adding = mode === 'add';
   $('modal-title').textContent = adding
-    ? `Add models to ${state.room ? state.room.title : 'this room'}`
-    : 'New chat room';
+    ? `${subscriptionOnly() ? 'Add subscription counsel' : 'Add models'} to ${state.room ? state.room.title : 'this room'}`
+    : (subscriptionOnly() ? 'New subscription chat' : 'New chat room');
   $('create-btn').textContent = adding ? 'Add to room' : 'Open room';
   $('ws-input').style.display = adding ? 'none' : '';
   const ctLabel = $('ct-check').closest('label');
@@ -382,7 +388,7 @@ async function openAddModal() {
   $('model-rows').innerHTML = '<div class="model-group">Refreshing provider status…</div>';
   try {
     await refreshModels();
-    renderModelRows({}, new Set(state.room.participants.map(p => p.id)));
+    renderModelRows({}, new Set(state.room.participants.map(p => canonicalProviderId(p.id))));
   } catch (e) {
     $('model-rows').innerHTML = `<div class="m-hint">Could not refresh providers: ${esc(e.message)}</div>`;
   }
@@ -396,7 +402,7 @@ async function checkModel(id, button) {
     await api.checkModel(id);
     await refreshModels();
     renderModelRows(saved, modalMode === 'add'
-      ? new Set(state.room.participants.map(p => p.id)) : null);
+      ? new Set(state.room.participants.map(p => canonicalProviderId(p.id))) : null);
   } catch (e) {
     button.disabled = false;
     button.textContent = 'Try again';
@@ -454,7 +460,7 @@ function renderRoom() {
   $('chat').style.display = r ? 'block' : 'none';
   if (!r) return;
   $('room-title').textContent = r.title;
-  $('room-members').textContent = r.participants.map(p => p.label).join(' · ');
+  $('room-members').textContent = r.participants.map(participantDisplay).join(' · ');
   $('crosstalk-btn').textContent = 'Ring: ' + (r.crosstalk ? 'on' : 'off');
   $('crosstalk-btn').classList.toggle('on', r.crosstalk);
   $('code-btn').textContent = 'Code: ' + (state.codeMode ? 'on' : 'off');
@@ -561,7 +567,8 @@ function renderTargetChips() {
     chip.className = 'tchip';
     const on = state.selected.size === 0 || state.selected.has(p.id);
     if (on) { chip.classList.add('sel', 'on'); chip.style.color = colorOf(p.id); }
-    chip.textContent = p.label + (state.selected.size === 0 ? '' : (on ? ' ✓' : ''));
+    chip.textContent = participantDisplay(p) + (state.selected.size === 0 ? '' : (on ? ' ✓' : ''));
+    if (participantPolicyBlocked(p)) chip.title = 'This legacy participant is preserved in room history but blocked by subscription-only policy.';
     chip.onclick = () => {
       if (state.selected.has(p.id)) state.selected.delete(p.id);
       else state.selected.add(p.id);
@@ -569,6 +576,15 @@ function renderTargetChips() {
     };
     wrap.appendChild(chip);
   }
+}
+
+function participantPolicyBlocked(participant) {
+  const canonicalId = canonicalProviderId(participant.id);
+  return subscriptionOnly() && !state.models.some((model) => model.id === canonicalId);
+}
+
+function participantDisplay(participant) {
+  return participant.label + (participantPolicyBlocked(participant) ? ' (policy blocked)' : '');
 }
 
 /* ---------------- Send (SSE) ---------------- */
@@ -748,9 +764,12 @@ $('code-btn').onclick = async () => {
   try {
     state.setup = await api.setup();
   } catch (e) {
-    // Settings endpoint unreachable: fall through and show the full picker.
+    // Settings endpoint unreachable: keep the safe subscription-only default.
   }
-  if (state.setup && state.setup.first_run) {
+  $('add-counsel-btn').title = subscriptionOnly()
+    ? 'Add subscription counsel to this room'
+    : 'Add models to this room — subscription, API, or local, even mid-conversation';
+  if (state.setup && state.setup.first_run && !subscriptionOnly()) {
     location.replace('/setup');
     return;
   }

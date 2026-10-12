@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import tempfile
@@ -96,6 +97,20 @@ class ModelApiTests(unittest.TestCase):
         self.assertNotIn("secret raw output", str(body))
         self.assertNotIn("secret raw output", str(server.MODEL_CHECKS))
 
+    def test_safe_subscription_failure_categories_remain_distinct(self) -> None:
+        claude = _entry("claude")
+        cases = (
+            ("Claude CLI authentication is required (exit 1).", "Authentication failed"),
+            ("Claude CLI subscription quota is unavailable (exit 1).", "quota is unavailable"),
+        )
+        for diagnostic, expected in cases:
+            with self.subTest(expected=expected), \
+                 mock.patch("server.providers.get_agent", return_value=claude), \
+                 mock.patch("server.providers.complete", side_effect=server.providers.ProviderError(diagnostic)):
+                response = self.client.post("/api/models/claude/check")
+            self.assertIn(expected, response.json()["message"])
+            self.assertNotIn("exit 1", response.json()["message"])
+
     def test_unexpected_reply_is_not_verified_or_returned(self) -> None:
         gemini = _entry("gemini")
         with mock.patch("server.providers.get_agent", return_value=gemini), \
@@ -182,6 +197,143 @@ class CodingReviewRoutingTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(captured["kwargs"]["coding"])
         self.assertIsNone(captured["kwargs"]["cwd"])
         self.assertIn("reviewer", captured["messages"][0]["content"])
+
+
+class SubscriptionRoomDispatchTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.policy = mock.patch.dict(
+            os.environ, {"LITIGATION_SUBSCRIPTION_ONLY": "1"}
+        )
+        self.policy.start()
+
+    def tearDown(self) -> None:
+        self.policy.stop()
+
+    async def test_legacy_gpt_strips_http_model_in_turn_and_ring(self) -> None:
+        room = {
+            "id": "legacy-gpt-room",
+            "participants": [
+                {"id": "gpt", "label": "GPT", "model": "gpt-4o-mini"},
+                {"id": "claude", "label": "Claude", "model": "sonnet"},
+            ],
+            "crosstalk": True,
+        }
+        turns: list[dict[str, object]] = []
+        rings: list[dict[str, object]] = []
+
+        async def fake_stream(agent, _messages, **_kwargs):
+            turns.append(dict(agent))
+            yield f"reply from {agent['id']}"
+
+        async def fake_complete(agent, _messages, **_kwargs):
+            rings.append(dict(agent))
+            return json.dumps({
+                "v": 1, "from": agent["id"], "kind": "claim", "text": "ring reply",
+            })
+
+        with mock.patch("server.providers.stream_completion", side_effect=fake_stream), \
+             mock.patch("server.providers.complete", side_effect=fake_complete), \
+             mock.patch("server.DB.add_message", return_value={"id": "message"}):
+            events = [event async for event in server._run_turn(
+                room, room["participants"],
+                [{"sender": "user", "content": "hello"}],
+            )]
+
+        self.assertTrue(events)
+        gpt_turn = next(agent for agent in turns if agent["id"] == "gpt")
+        gpt_ring = next(agent for agent in rings if agent["id"] == "gpt")
+        for agent in (gpt_turn, gpt_ring):
+            self.assertEqual(agent["api"], "cli")
+            self.assertEqual(agent["canonical_id"], "openai")
+            self.assertEqual(agent["model"], "")
+
+    async def test_legacy_gpt_strips_http_model_in_vote(self) -> None:
+        room = {
+            "id": "legacy-vote-room",
+            "participants": [
+                {"id": "gpt", "label": "GPT", "model": "gpt-4o-mini"},
+            ],
+        }
+        seen: list[dict[str, object]] = []
+
+        async def fake_complete(agent, _messages, **_kwargs):
+            seen.append(dict(agent))
+            return json.dumps({
+                "v": 1, "from": agent["id"], "kind": "verdict", "text": "yes",
+                "verdict": {"choice": "yes", "confidence": 1.0, "rationale": "ok"},
+            })
+
+        with mock.patch("server.DB.get_room", return_value=room), \
+             mock.patch("server.DB.list_messages", return_value=[
+                 {"sender": "user", "content": "approve?"}]), \
+             mock.patch("server.DB.add_message", return_value={"id": "vote"}), \
+             mock.patch("server.providers.complete", side_effect=fake_complete):
+            result = await server.vote(room["id"], server.VoteBody(question="approve?"))
+
+        self.assertEqual(result["errors"], [])
+        self.assertEqual(seen[0]["api"], "cli")
+        self.assertEqual(seen[0]["model"], "")
+
+    async def test_blocked_legacy_member_does_not_block_valid_turn(self) -> None:
+        room = {
+            "id": "mixed-legacy-room",
+            "participants": [
+                {"id": "openrouter", "label": "OpenRouter", "model": "paid"},
+                {"id": "claude", "label": "Claude", "model": "sonnet"},
+            ],
+            "crosstalk": False,
+        }
+        called: list[str] = []
+
+        async def fake_stream(agent, _messages, **_kwargs):
+            called.append(str(agent["id"]))
+            yield "valid reply"
+
+        with mock.patch("server.providers.stream_completion", side_effect=fake_stream), \
+             mock.patch("server.DB.add_message", return_value={"id": "message"}):
+            raw_events = [event async for event in server._run_turn(
+                room, room["participants"],
+                [{"sender": "user", "content": "hello"}],
+            )]
+        events = [json.loads(event.removeprefix("data: ")) for event in raw_events]
+        self.assertEqual(called, ["claude"])
+        self.assertTrue(any(
+            event.get("type") == "error" and event.get("agent") == "openrouter"
+            and "subscription-only" in event.get("error", "")
+            for event in events
+        ))
+        self.assertTrue(any(
+            event.get("type") == "done" and event.get("agent") == "claude"
+            for event in events
+        ))
+
+    async def test_roster_patch_preserves_unchanged_blocked_legacy_member(self) -> None:
+        room = {
+            "id": "legacy-roster",
+            "title": "Legacy", "crosstalk": False,
+            "participants": [
+                {"id": "ollama", "label": "Ollama", "model": "llama3.2"},
+            ],
+        }
+        with mock.patch("server.DB.get_room", side_effect=[room, room]), \
+             mock.patch("server.DB.update_room") as update:
+            await server.patch_room(room["id"], {"participants": [
+                {"id": "ollama"}, {"id": "claude"},
+            ]})
+        participants = update.call_args.kwargs["participants"]
+        self.assertEqual(participants[0], room["participants"][0])
+        self.assertEqual(participants[1]["id"], "claude")
+
+    def test_new_legacy_gpt_alias_is_safe_before_persistence(self) -> None:
+        participant = server._clean_participant({
+            "id": "gpt", "model": "gpt-4o-mini",
+        })
+        self.assertEqual(participant["id"], "gpt")
+        self.assertEqual(participant["model"], "")
+
+    def test_new_non_subscription_participant_is_rejected(self) -> None:
+        with self.assertRaisesRegex(server.providers.ProviderError, "subscription-only"):
+            server._clean_participant({"id": "openrouter"})
 
 
 if __name__ == "__main__":

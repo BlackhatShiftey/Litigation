@@ -24,22 +24,22 @@
   <main id="main-content">
     <section class="hero">
       <div>
-        <p class="eyebrow">PROVIDER SETTINGS</p>
-        <h1>Subscriptions, API keys, local models.</h1>
-        <p>Configure every provider family here. When you start a chat you pick participants per conversation — subscription models, API models, and local models are selected side by side in the New-chat dialog.</p>
+        <p class="eyebrow" id="setup-eyebrow">SUBSCRIPTION SETTINGS</p>
+        <h1 id="setup-title">Subscription accounts.</h1>
+        <p id="setup-intro">Litigation uses the account-backed CLIs already signed in on this installation. Review account status here, then choose subscription counsel when you start or update a chat.</p>
       </div>
       <div id="setup-state" class="mode-state" role="status">Loading…</div>
     </section>
 
     <section class="settings-section" id="section-subscription" aria-labelledby="h-subscription">
       <div class="section-title">
-        <h2 id="h-subscription">Subscription models</h2>
-        <span>Account-backed CLIs — no pay-as-you-go keys involved</span>
+        <h2 id="h-subscription">Subscription accounts</h2>
+        <span>Existing CLI sign-ins are detected and used automatically</span>
       </div>
       <div id="sub-providers" class="provider-list"><div class="hint">Loading provider state…</div></div>
-      <div class="credential-box">
-        <label for="zai-key">GLM · Z.ai Coding Plan credential <code>ZAI_API_KEY</code></label>
-        <div class="credential-row">
+      <div class="credential-box" id="glm-account">
+        <label for="zai-key" id="glm-account-label">GLM · Z.ai Coding Plan account</label>
+        <div class="credential-row" id="zai-key-controls" hidden>
           <input type="password" id="zai-key" autocomplete="off" placeholder="paste credential (stored locally, 0600, never echoed back)">
           <button type="button" id="save-zai" class="secondary">Save</button>
         </div>
@@ -47,7 +47,7 @@
       </div>
     </section>
 
-    <section class="settings-section" id="section-api" aria-labelledby="h-api">
+    <section class="settings-section" id="section-api" aria-labelledby="h-api" hidden>
       <div class="section-title">
         <h2 id="h-api">API keys · cloud models</h2>
         <span>Pay-as-you-go provider keys, written to a local <code>0600</code> file and applied without a restart</span>
@@ -59,7 +59,7 @@
       </div>
     </section>
 
-    <section class="settings-section" id="section-local" aria-labelledby="h-local">
+    <section class="settings-section" id="section-local" aria-labelledby="h-local" hidden>
       <div class="section-title">
         <h2 id="h-local">Local models</h2>
         <span>Your own machine's inference — no keys, no cloud billing</span>
@@ -68,7 +68,7 @@
     </section>
 
     <section class="alt-actions">
-      <button type="button" id="finish-setup" class="secondary">Finish setup</button>
+      <button type="button" id="finish-setup" class="secondary">Dismiss setup notice</button>
       <a class="back" href="/?new=1">Start a chat</a>
     </section>
 

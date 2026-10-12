@@ -1,11 +1,9 @@
 """FastAPI routes for Litigation's provider settings page.
 
-Litigation has no global billing mode — subscription, API, and local models
-are selected per conversation in the New-chat dialog. This surface owns
-provider configuration: subscription login guidance and checks, pay-as-you-go
-API keys, and local model servers (Ollama, LM Studio) with their model
-overrides. Everything lives behind /setup and /api/setup so the surface can
-be re-hosted (e.g. absorbed by SEAM) without chat/room coupling.
+Litigation defaults to subscription-only provider selection and dispatch.
+Legacy deployments can explicitly opt into the mixed subscription, API, and
+local-model surface. Everything lives behind /setup and /api/setup so the
+surface can be re-hosted (e.g. absorbed by SEAM) without chat/room coupling.
 
 Security posture: key values arrive over the loopback-only server, are
 written to a 0600 user file, applied to the process environment, and are
@@ -94,6 +92,8 @@ def create_setup_router(store: SetupStore) -> APIRouter:
             if entry.get("api") == "cli":
                 credential_names.update(entry.get("required_env", []))
                 continue
+            if providers.subscription_only():
+                continue
             env_key = entry.get("env_key", "")
             if env_key:
                 api_keys.append({
@@ -117,6 +117,7 @@ def create_setup_router(store: SetupStore) -> APIRouter:
         return {
             "first_run": not configured,
             "configured": configured,
+            "subscription_only": providers.subscription_only(),
             "subscription_ids": _subscription_ids(),
             "api_keys": api_keys,
             "subscription_credentials": [
@@ -144,7 +145,7 @@ def create_setup_router(store: SetupStore) -> APIRouter:
         for entry in providers.registry():
             if entry.get("api") == "cli":
                 allowed.update(entry.get("required_env", []))
-            elif entry.get("env_key"):
+            elif not providers.subscription_only() and entry.get("env_key"):
                 allowed.add(str(entry["env_key"]))
         unknown = sorted(set(body.keys) - allowed)
         if unknown:
@@ -163,7 +164,8 @@ def create_setup_router(store: SetupStore) -> APIRouter:
     @router.delete("/api/setup/keys/{env_key}")
     def clear_key(env_key: str) -> dict[str, Any]:
         allowed = {str(e["env_key"]) for e in providers.registry()
-                   if e.get("api") != "cli" and e.get("env_key")}
+                   if not providers.subscription_only()
+                   and e.get("api") != "cli" and e.get("env_key")}
         allowed.update(name for e in providers.registry()
                        if e.get("api") == "cli" for name in e.get("required_env", []))
         if env_key not in allowed:
@@ -177,6 +179,11 @@ def create_setup_router(store: SetupStore) -> APIRouter:
 
     @router.post("/api/setup/local/{server_id}")
     def set_local_model(server_id: str, body: LocalModelBody) -> dict[str, Any]:
+        if providers.subscription_only():
+            raise HTTPException(
+                status_code=404,
+                detail="local servers are unavailable in subscription-only mode",
+            )
         entry = next((e for e in _local_entries() if e["id"] == server_id), None)
         if not entry:
             raise HTTPException(status_code=404, detail="unknown local server")

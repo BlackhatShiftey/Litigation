@@ -503,3 +503,28 @@ with litigation-agentroom-canticle.png and litigation-agentroom-canticle-mobile.
 plus Knowledge and provider-picker previews. Theme changes are uncommitted and
 not pushed. Prior cluster/licensing proposal edits and .blender-toolkit remain
 preserved; no effective license was added.
+
+
+## 2026-10-12 — Restore automatic subscription routing
+
+Subscription-only policy now defaults on and this installation explicitly enables
+it. New chats, counsel selection, chat/ring/vote dispatch, and coding-provider
+selection use the trusted subscription registry. There is no paid API fallback.
+Legacy GPT participants resolve through the ChatGPT CLI with stale HTTP model
+overrides removed; existing room identities and transcripts remain unchanged.
+Unsupported legacy participants return individual policy errors without blocking
+valid counsel. API/local configuration sections are hidden in subscription mode.
+
+The existing GLM Coding Plan credential was recovered into the private credential
+store and loaded by the server; no credential value was added to source or this
+record. The server was restarted and is running locally on port 8766.
+
+Verification: all 145 tests passed, Python compilation and git diff --check passed.
+Live checks through the restarted HTTP server returned successful verified
+responses for Claude, Grok, Gemini via Antigravity, GLM, Cline, OpenAI, and Astra.
+Rendered New Chat showed only the seven subscription routes. Settings showed
+7 of 7 routes available, the GLM account configured, zero visible password inputs,
+and no JavaScript exceptions or horizontal overflow. These checks establish
+current response reachability, not unlimited subscription quota.
+
+This recovery is applied locally and remains uncommitted and unpushed.

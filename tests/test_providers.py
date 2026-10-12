@@ -89,6 +89,10 @@ time.sleep(30)
 
 class ProviderCliTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self) -> None:
+        self.subscription_patch = mock.patch.dict(
+            os.environ, {"LITIGATION_SUBSCRIPTION_ONLY": "0"}
+        )
+        self.subscription_patch.start()
         self.tempdir = tempfile.TemporaryDirectory(prefix="litigation-provider-test-")
         self.root = Path(self.tempdir.name)
         self.fake_cli = self.root / "fake_cli.py"
@@ -97,6 +101,7 @@ class ProviderCliTests(unittest.IsolatedAsyncioTestCase):
 
     def tearDown(self) -> None:
         self.tempdir.cleanup()
+        self.subscription_patch.stop()
 
     def _fake_agent(self, provider_id: str) -> dict[str, object]:
         agent = providers.get_agent(provider_id)
@@ -285,6 +290,42 @@ class ProviderCliTests(unittest.IsolatedAsyncioTestCase):
 
 
 class ProviderRegistryTests(unittest.TestCase):
+    def test_subscription_only_registry_is_a_builtin_allowlist(self) -> None:
+        spoof = json.dumps([{
+            "id": "spoof", "label": "Spoof", "api": "cli",
+            "billing": "subscription", "cli": ["sh"],
+        }])
+        with mock.patch.dict(os.environ, {
+            "LITIGATION_SUBSCRIPTION_ONLY": "1",
+            "LITIGATION_EXTRA_MODELS": spoof,
+        }):
+            entries = providers.registry()
+        self.assertEqual(
+            {entry["id"] for entry in entries},
+            {"claude", "grok", "gemini", "glm", "cline", "openai", "astra"},
+        )
+        self.assertTrue(all(entry["api"] == "cli" for entry in entries))
+        self.assertTrue(all(entry["billing"] == "subscription" for entry in entries))
+
+    def test_explicit_zero_restores_legacy_mixed_registry(self) -> None:
+        with mock.patch.dict(os.environ, {"LITIGATION_SUBSCRIPTION_ONLY": "0"}):
+            by_id = {entry["id"]: entry for entry in providers.registry()}
+        self.assertEqual(by_id["gpt"]["api"], "openai")
+        self.assertIn("ollama", by_id)
+
+    def test_safe_legacy_aliases_resolve_to_subscription_clis(self) -> None:
+        with mock.patch.dict(os.environ, {"LITIGATION_SUBSCRIPTION_ONLY": "1"}):
+            gpt = providers.resolve_agent("gpt", "gpt-4o-mini")
+            agy = providers.resolve_agent("agy", "gemini-safe-model")
+            astra = providers.resolve_agent("astra", "gpt-6-astra")
+        self.assertEqual(gpt["api"], "cli")
+        self.assertEqual(gpt["canonical_id"], "openai")
+        self.assertEqual(gpt["model"], "")
+        self.assertEqual(agy["canonical_id"], "gemini")
+        self.assertEqual(agy["model"], "gemini-safe-model")
+        self.assertEqual(astra["canonical_id"], "openai")
+        self.assertEqual(astra["model"], "gpt-6-astra")
+
     def test_antigravity_long_turn_timeout_stays_inside_agent_wall_budget(self) -> None:
         for agent_id in ("antigravity", "gemini"):
             agent = providers.get_agent(agent_id)
@@ -323,6 +364,33 @@ class ProviderRegistryTests(unittest.TestCase):
         self.assertEqual(agent["setup_status"], "installed_unverified")
         self.assertEqual(agent["auth_status"], "unverified")
         self.assertEqual(agent["billing"], "subscription")
+
+
+class SubscriptionDispatchTests(unittest.IsolatedAsyncioTestCase):
+    async def test_direct_http_descriptor_is_denied_before_network(self) -> None:
+        paid = {
+            "id": "openrouter", "label": "OpenRouter", "api": "openai",
+            "billing": "api_or_local", "base_url": "https://example.invalid/v1",
+            "env_key": "OPENROUTER_API_KEY", "model": "paid-model",
+        }
+        with mock.patch.dict(os.environ, {"LITIGATION_SUBSCRIPTION_ONLY": "1"}), \
+             mock.patch("providers._stream_openai") as stream_openai:
+            with self.assertRaisesRegex(providers.ProviderError, "subscription-only"):
+                await providers.complete(
+                    paid, [{"role": "user", "content": "do not dispatch"}]
+                )
+        stream_openai.assert_not_called()
+
+    def test_pre_resolved_paid_gpt_descriptor_becomes_chatgpt_cli(self) -> None:
+        legacy = {
+            "id": "gpt", "label": "GPT", "api": "openai",
+            "billing": "api_or_local", "model": "gpt-4o-mini",
+        }
+        with mock.patch.dict(os.environ, {"LITIGATION_SUBSCRIPTION_ONLY": "1"}):
+            resolved, model = providers._resolve_dispatch_agent(legacy, None)
+        self.assertEqual(resolved["api"], "cli")
+        self.assertEqual(resolved["canonical_id"], "openai")
+        self.assertEqual(model, "")
 
 
 if __name__ == "__main__":

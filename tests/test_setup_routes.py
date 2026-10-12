@@ -50,9 +50,11 @@ class _RouteTestBase(unittest.TestCase):
         _KEYS.unlink(missing_ok=True)
         self._saved_env = {name: os.environ.get(name)
                            for name in ("OPENAI_API_KEY", "OPENROUTER_API_KEY",
-                                        "ZAI_API_KEY", "OLLAMA_MODEL")}
+                                        "ZAI_API_KEY", "OLLAMA_MODEL",
+                                        "LITIGATION_SUBSCRIPTION_ONLY")}
         for name in self._saved_env:
             os.environ.pop(name, None)
+        os.environ["LITIGATION_SUBSCRIPTION_ONLY"] = "0"
         self.store = SetupStore(setup_path=_SETUP, keys_path=_KEYS)
         app = FastAPI()
         app.include_router(create_setup_router(self.store))
@@ -265,7 +267,23 @@ class SetupApiTests(_RouteTestBase):
         response = self.client.get("/setup")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("Subscriptions, API keys, local models", response.text)
+        self.assertIn("Subscription accounts", response.text)
+
+    def test_subscription_only_hides_and_rejects_paid_and_local_setup(self) -> None:
+        with mock.patch.dict(os.environ, {"LITIGATION_SUBSCRIPTION_ONLY": "1"}), \
+             mock.patch("setup_routes._reachable") as reachable:
+            body = self.client.get("/api/setup").json()
+            paid = self.client.post("/api/setup/keys", json={
+                "keys": {"OPENAI_API_KEY": "must-not-be-written"}})
+            local = self.client.post("/api/setup/local/ollama", json={
+                "model": "llama3.1"})
+        self.assertTrue(body["subscription_only"])
+        self.assertEqual(body["api_keys"], [])
+        self.assertEqual(body["local_servers"], [])
+        reachable.assert_not_called()
+        self.assertEqual(paid.status_code, 400)
+        self.assertEqual(local.status_code, 404)
+        self.assertFalse(_KEYS.exists())
 
 
 class RoomCreationTests(_RouteTestBase):
