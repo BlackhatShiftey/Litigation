@@ -6,6 +6,50 @@
 `http://127.0.0.1:8766`. All five subscription connection checks and a shared
 chat turn passed on 2026-10-10. Changes are uncommitted.
 
+## 2026-10-12 — Per-conversation billing families + three-section settings
+
+**Direction change.** The global auth-mode control is gone: subscription,
+API, and local models are now three provider families chosen **per
+conversation**, not toggled from the header. `shared-nav.js` mounts only a ⚙
+gear link to `/setup`; the segmented Subscriptions/API/All buttons and the
+`litigation:authmode` event were removed, and `server.py` no longer enforces
+a mode at room creation (rooms mix families freely — the selection in the
+New-chat dialog is the setting).
+
+**New-chat dialog** now always shows three groups — Subscription models,
+API models, Local models — classified from registry billing metadata, so a
+room can select subscription models and then API/local models side by side.
+
+**`/setup` became the provider settings page** with one section per family:
+subscription CLIs (status, hints, Test connection, GLM `ZAI_API_KEY`
+credential), API keys (0600 local file, never echoed), and **local models in
+their own section** — Ollama/LM Studio cards with a live running/not-running
+port probe and a persisted model override each. First-run redirects to
+`/setup` exactly once; **Finish setup** or any save stops it.
+
+**Store/API changes** (`setup_store.py`, `setup_routes.py`): auth_mode
+replaced by a configured marker + `model_overrides` in the versioned settings
+JSON; `POST /api/setup/local/{id}` sets overrides; `POST /api/setup/dismiss`
+replaces the mode endpoint; key/credential endpoints unchanged. An
+unreadable settings file is reported as `store_error` and never blocks boot.
+CLI: `litigation setup --mode` removed; `--local-model ID=MODEL` and `--done`
+added. `install.sh` and docs updated accordingly.
+
+Tests: `tests/test_setup_routes.py` rewritten for the new contract (27 pass
+across setup + CLI suites; full suite 127 with only the 8 pre-existing
+agent-sandbox failures that predate this work).
+
+**Alpine status everywhere.** The SEAM connection indicator moved out of the
+Knowledge page into the shared navigation: `shared-nav.js` mounts an
+`Alpine` chip (green dot = connected, amber = unavailable) linking to
+`/knowledge` on every page. `/api/seam/status` probes over SSH, so the chip
+caches its result in `sessionStorage` with a 5-minute TTL instead of probing
+on each navigation. The old `#connection` badge was removed from `seam.html`;
+`seam.js` now refreshes the shared chip from its detailed status load.
+Verified live: chip reaches `ok` on Alpine over Tailscale, and the New-chat
+dialog renders the three groups (23 provider rows) with no first-run
+redirect for the already-configured user.
+
 ## 2026-10-12 — Knowledge nav fix + terminal CLI
 
 **Nav regression fix.** On the Knowledge page at ~933px the workspace tabs

@@ -195,15 +195,17 @@ def build_parser() -> argparse.ArgumentParser:
     export.add_argument("output", type=Path)
 
     setup = commands.add_parser(
-        "setup", help="choose subscription vs API-key usage (headless install)")
-    setup.add_argument("--mode", choices=("subscription", "api", "mixed"),
-                       help="persist the auth mode; new rooms follow it")
+        "setup", help="manage provider keys and settings (headless)")
     setup.add_argument("--set", action="append", default=[], metavar="ENV",
                        help="prompt for a provider key and store it locally (repeatable)")
     setup.add_argument("--clear", action="append", default=[], metavar="ENV",
                        help="remove a stored provider key (repeatable)")
+    setup.add_argument("--local-model", action="append", default=[], metavar="ID=MODEL",
+                       help="set a local server model override, e.g. ollama=llama3.1")
+    setup.add_argument("--done", action="store_true",
+                       help="mark setup visited (stops the first-run redirect)")
     setup.add_argument("--status", action="store_true",
-                       help="print the current setup state (no key values)")
+                       help="print the current provider settings (no key values)")
     return parser
 
 
@@ -417,8 +419,14 @@ def main(argv: list[str] | None = None) -> int:
                 request("POST", "/api/setup/keys", {"keys": values}, url=url)
             for name in args.clear:
                 request("DELETE", f"/api/setup/keys/{urllib.parse.quote(name)}", url=url)
-            if args.mode:
-                request("POST", "/api/setup/mode", {"mode": args.mode}, url=url)
+            for pair in args.local_model:
+                if "=" not in pair:
+                    raise RuntimeError(f"--local-model expects ID=MODEL, got {pair!r}")
+                server_id, model = pair.split("=", 1)
+                request("POST", f"/api/setup/local/{urllib.parse.quote(server_id)}",
+                        {"model": model.strip()}, url=url)
+            if args.done:
+                request("POST", "/api/setup/dismiss", url=url)
             result = request("GET", "/api/setup", url=url)
         else:
             raise AssertionError(args.command)

@@ -3,10 +3,10 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Setup · Canticle Litigation</title>
+  <title>Settings · Canticle Litigation</title>
   <link rel="stylesheet" href="/setup.css">
   <link rel="stylesheet" href="/branding/canticle-cosmic.css?v=1.0.0">
-  <link rel="stylesheet" href="/shared-nav.css?v=2.1.1">
+  <link rel="stylesheet" href="/shared-nav.css?v=2.3.0">
   <link rel="stylesheet" href="/branding/litigation-canticle.css?v=1.0.1">
   <script src="/shared-nav.js" defer></script>
 </head>
@@ -16,7 +16,7 @@
     <a class="litigation-nav__brand cc-brand" href="/" aria-label="Canticle Litigation home"><img src="/branding/canticle-lockup.svg?v=1.0.0" alt="Canticle"><span class="litigation-nav__product">Litigation</span></a>
     <nav class="litigation-nav__tabs" aria-label="Workspace sections">
       <a href="/">Chat</a><a href="/projects">Projects</a><a href="/rules">Rules</a>
-      <a href="/knowledge">Knowledge</a><a href="/setup" aria-current="page">Setup</a>
+      <a href="/knowledge">Knowledge</a><a href="/setup" aria-current="page">Settings</a>
     </nav>
     <div class="litigation-nav__actions"><a class="litigation-nav__new" href="/?new=1">New chat</a></div>
   </header>
@@ -24,44 +24,52 @@
   <main id="main-content">
     <section class="hero">
       <div>
-        <p class="eyebrow">FIRST-RUN SETUP</p>
-        <h1>Subscriptions or API keys — your call.</h1>
-        <p>Choose how Litigation authenticates inference. You can flip between them any time from the top navigation; new rooms follow the current mode, existing rooms keep the routes they were created with.</p>
+        <p class="eyebrow">PROVIDER SETTINGS</p>
+        <h1>Subscriptions, API keys, local models.</h1>
+        <p>Configure every provider family here. When you start a chat you pick participants per conversation — subscription models, API models, and local models are selected side by side in the New-chat dialog.</p>
       </div>
-      <div id="mode-state" class="mode-state" role="status">Loading…</div>
+      <div id="setup-state" class="mode-state" role="status">Loading…</div>
     </section>
 
-    <section class="mode-grid" aria-label="Authentication choice">
-      <article class="mode-card" id="card-subscription">
-        <h2>Use my subscriptions</h2>
-        <p>Each provider runs through its own locally signed-in CLI. No pay-as-you-go keys are involved.</p>
-        <div id="sub-providers" class="provider-list"><div class="hint">Loading provider state…</div></div>
-        <div class="credential-box">
-          <label for="zai-key">GLM · Z.ai Coding Plan credential <code>ZAI_API_KEY</code></label>
-          <div class="credential-row">
-            <input type="password" id="zai-key" autocomplete="off" placeholder="paste credential (stored locally, 0600, never echoed back)">
-            <button type="button" id="save-zai" class="secondary">Save</button>
-          </div>
-          <div class="hint" id="zai-state"></div>
+    <section class="settings-section" id="section-subscription" aria-labelledby="h-subscription">
+      <div class="section-title">
+        <h2 id="h-subscription">Subscription models</h2>
+        <span>Account-backed CLIs — no pay-as-you-go keys involved</span>
+      </div>
+      <div id="sub-providers" class="provider-list"><div class="hint">Loading provider state…</div></div>
+      <div class="credential-box">
+        <label for="zai-key">GLM · Z.ai Coding Plan credential <code>ZAI_API_KEY</code></label>
+        <div class="credential-row">
+          <input type="password" id="zai-key" autocomplete="off" placeholder="paste credential (stored locally, 0600, never echoed back)">
+          <button type="button" id="save-zai" class="secondary">Save</button>
         </div>
-        <button type="button" id="use-subscription" class="primary">Use subscriptions</button>
-      </article>
+        <div class="hint" id="zai-state"></div>
+      </div>
+    </section>
 
-      <article class="mode-card" id="card-api">
-        <h2>Use API keys</h2>
-        <p>Pay-as-you-go provider keys. Values are written to a local <code>0600</code> file and applied immediately — no restart needed.</p>
-        <div id="api-keys" class="key-list"><div class="hint">Loading key list…</div></div>
-        <p class="hint">Local servers (Ollama, LM Studio) need no key and stay available under every mode.</p>
-        <div class="actions-row">
-          <button type="button" id="save-keys" class="secondary">Save keys</button>
-          <button type="button" id="use-api" class="primary">Use API keys</button>
-        </div>
-      </article>
+    <section class="settings-section" id="section-api" aria-labelledby="h-api">
+      <div class="section-title">
+        <h2 id="h-api">API keys · cloud models</h2>
+        <span>Pay-as-you-go provider keys, written to a local <code>0600</code> file and applied without a restart</span>
+      </div>
+      <div id="api-keys" class="key-list"><div class="hint">Loading key list…</div></div>
+      <div class="actions-row">
+        <button type="button" id="save-keys" class="secondary">Save keys</button>
+        <span class="hint">Only fill in what you use — unset providers show as offline.</span>
+      </div>
+    </section>
+
+    <section class="settings-section" id="section-local" aria-labelledby="h-local">
+      <div class="section-title">
+        <h2 id="h-local">Local models</h2>
+        <span>Your own machine's inference — no keys, no cloud billing</span>
+      </div>
+      <div id="local-servers" class="local-list"><div class="hint">Loading local servers…</div></div>
     </section>
 
     <section class="alt-actions">
-      <button type="button" id="use-mixed" class="secondary">Decide later — show everything</button>
-      <a class="back" href="/">Back to chat</a>
+      <button type="button" id="finish-setup" class="secondary">Finish setup</button>
+      <a class="back" href="/?new=1">Start a chat</a>
     </section>
 
     <div id="message" role="status" aria-live="polite"></div>

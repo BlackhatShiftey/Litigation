@@ -26,9 +26,15 @@ function capability(id, value) {
 
 async function loadStatus() {
   const status = await api("/api/seam/status");
-  const badge = $("#connection");
-  badge.textContent = status.reachable && status.installed ? "Alpine connected" : "Alpine unavailable";
-  badge.className = `badge ${status.reachable && status.installed ? "good" : "bad"}`;
+  const badge = $("#connection");  // optional: the shared nav now carries the Alpine chip
+  if (badge) {
+    badge.textContent = status.reachable && status.installed ? "Alpine connected" : "Alpine unavailable";
+    badge.className = `badge ${status.reachable && status.installed ? "good" : "bad"}`;
+  }
+  const chip = document.querySelector(".litigation-nav__alpine");
+  if (chip) {
+    chip.dataset.state = status.reachable && status.installed ? "ok" : "down";
+  }
   const caps = status.capabilities || {};
   capability("#cap-ingest", caps.ingest);
   capability("#cap-search", caps.knowledge_search);

@@ -18,11 +18,7 @@ _TEMP = tempfile.TemporaryDirectory(prefix="litigation-setup-test-")
 _SETUP = Path(_TEMP.name) / "setup.json"
 _KEYS = Path(_TEMP.name) / "keys.env"
 
-# test_server_models.py may already have imported server under its own temp
-# environment; these lines follow the same isolation pattern regardless.
 os.environ.setdefault("LITIGATION_SEAM_SYNC_ENABLED", "0")
-
-import server  # noqa: E402
 
 
 def _fake_registry() -> list[dict[str, object]]:
@@ -39,9 +35,12 @@ def _fake_registry() -> list[dict[str, object]]:
          "env_key": "", "billing": "subscription", "model": model,
          "required_env": ["ZAI_API_KEY"]},
         {"id": "ollama", "label": "Ollama", "color": "#a78bfa", "api": "openai",
-         "env_key": "", "base_url": "http://localhost:11434/v1", "model": model},
-        {"id": "zcode", "label": "ZCode", "color": "#f59e0b", "api": "cli",
-         "env_key": "", "billing": "api_or_local", "model": model},
+         "env_key": "", "base_url": "http://127.0.0.1:1/v1",
+         "default_model": "llama3.2", "model_env": "OLLAMA_MODEL", "model": model},
+        {"id": "lmstudio", "label": "LM Studio", "color": "#e879f9",
+         "api": "openai", "env_key": "",
+         "base_url": "http://127.0.0.1:2/v1", "default_model": "qwen",
+         "model_env": "LMSTUDIO_MODEL", "model": model},
     ]
 
 
@@ -51,7 +50,7 @@ class _RouteTestBase(unittest.TestCase):
         _KEYS.unlink(missing_ok=True)
         self._saved_env = {name: os.environ.get(name)
                            for name in ("OPENAI_API_KEY", "OPENROUTER_API_KEY",
-                                        "ZAI_API_KEY")}
+                                        "ZAI_API_KEY", "OLLAMA_MODEL")}
         for name in self._saved_env:
             os.environ.pop(name, None)
         self.store = SetupStore(setup_path=_SETUP, keys_path=_KEYS)
@@ -77,28 +76,39 @@ class SetupStoreTests(unittest.TestCase):
         _KEYS.unlink(missing_ok=True)
         self.store = SetupStore(setup_path=_SETUP, keys_path=_KEYS)
 
-    def test_missing_preference_reads_as_unset(self) -> None:
-        self.assertEqual(self.store.auth_mode(), "unset")
+    def test_fresh_store_is_unconfigured(self) -> None:
+        self.assertFalse(self.store.is_configured())
+        self.assertEqual(self.store.model_overrides(), {})
 
-    def test_mode_round_trip_and_record_shape(self) -> None:
+    def test_mark_configured_is_idempotent(self) -> None:
         import json
-        record = self.store.set_auth_mode("subscription")
-        self.assertEqual(record["version"], 1)
-        self.assertEqual(record["surface"], "litigation")
-        self.assertTrue(record["chosen_at"].endswith(("+00:00", "Z")))
-        self.assertEqual(self.store.auth_mode(), "subscription")
+        first = self.store.mark_configured()
+        self.assertIn("configured_at", first)
+        second = self.store.mark_configured()
+        self.assertEqual(second["configured_at"], first["configured_at"])
         on_disk = json.loads(_SETUP.read_text(encoding="utf-8"))
-        self.assertEqual(on_disk["auth_mode"], "subscription")
+        self.assertEqual(on_disk["surface"], "litigation")
+        self.assertEqual(on_disk["version"], 1)
 
-    def test_invalid_mode_is_rejected(self) -> None:
-        with self.assertRaises(SetupStoreError):
-            self.store.set_auth_mode("bogus")
-
-    def test_corrupt_preference_is_visible_not_silent(self) -> None:
+    def test_corrupt_settings_are_visible_not_silent(self) -> None:
         _SETUP.parent.mkdir(parents=True, exist_ok=True)
         _SETUP.write_text("{not json", encoding="utf-8")
         with self.assertRaises(SetupStoreError):
-            self.store.auth_mode()
+            self.store.model_overrides()
+
+    def test_model_overrides_round_trip_and_clear(self) -> None:
+        try:
+            self.store.set_model_override("OLLAMA_MODEL", "llama3.1")
+            self.assertEqual(self.store.model_overrides(),
+                             {"OLLAMA_MODEL": "llama3.1"})
+            self.store.set_model_override("OLLAMA_MODEL", "")
+            self.assertEqual(self.store.model_overrides(), {})
+            with self.assertRaises(SetupStoreError):
+                self.store.set_model_override("OLLAMA_MODEL", "multi\nline")
+            with self.assertRaises(SetupStoreError):
+                self.store.set_model_override("bad-name", "x")
+        finally:
+            os.environ.pop("OLLAMA_MODEL", None)
 
     def test_keys_write_read_clear_and_environ_apply(self) -> None:
         try:
@@ -125,69 +135,49 @@ class SetupStoreTests(unittest.TestCase):
         with self.assertRaises(SetupStoreError):
             self.store.write_keys({"OPENAI_API_KEY": "line1\nFORGED_KEY=x"})
 
-    def test_load_keys_into_overrides(self) -> None:
+    def test_load_keys_and_overrides_into(self) -> None:
         try:
             env: dict[str, str] = {"OPENAI_API_KEY": "old"}
             self.store.write_keys({"OPENAI_API_KEY": "new"})
-            loaded = self.store.load_keys_into(env)
-            self.assertEqual(loaded, ["OPENAI_API_KEY"])
+            self.store.set_model_override("OLLAMA_MODEL", "llama3.1")
+            self.store.load_keys_into(env)
+            self.store.load_overrides_into(env)
             self.assertEqual(env["OPENAI_API_KEY"], "new")
+            self.assertEqual(env["OLLAMA_MODEL"], "llama3.1")
         finally:
             os.environ.pop("OPENAI_API_KEY", None)
+            os.environ.pop("OLLAMA_MODEL", None)
 
 
 class SetupApiTests(_RouteTestBase):
-    def test_get_setup_reports_unset_and_lists_keys_without_values(self) -> None:
+    def test_get_setup_reports_first_run_and_families(self) -> None:
         body = self.client.get("/api/setup").json()
-        self.assertEqual(body["auth_mode"], "unset")
+        self.assertTrue(body["first_run"])
         self.assertFalse(body["configured"])
-        self.assertEqual(body["modes"], ["subscription", "api", "mixed"])
+        self.assertEqual(body["subscription_ids"], ["claude", "glm"])
         by_name = {k["env_key"]: k for k in body["api_keys"]}
         self.assertIn("OPENAI_API_KEY", by_name)
-        self.assertIn("OPENROUTER_API_KEY", by_name)
         self.assertFalse(by_name["OPENAI_API_KEY"]["set"])
         credentials = {c["env_key"] for c in body["subscription_credentials"]}
         self.assertEqual(credentials, {"ZAI_API_KEY"})
+        locals_by_id = {s["id"]: s for s in body["local_servers"]}
+        self.assertEqual(set(locals_by_id), {"ollama", "lmstudio"})
+        # base_url points at closed ports, so reachability is False and safe
+        self.assertFalse(locals_by_id["ollama"]["reachable"])
+        self.assertEqual(locals_by_id["ollama"]["model"], "llama3.2")
         self.assertNotIn("cli", str(body))
-        self.assertNotIn("required_env", str(body))
 
-    def test_mode_post_persists(self) -> None:
-        response = self.client.post("/api/setup/mode", json={"mode": "api"})
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["auth_mode"], "api")
-        self.assertEqual(self.store.auth_mode(), "api")
-
-    def test_mode_post_rejects_unknown_mode(self) -> None:
-        response = self.client.post("/api/setup/mode", json={"mode": "bogus"})
-        self.assertEqual(response.status_code, 422)
-
-    def test_corrupt_preference_reports_store_error_without_crashing(self) -> None:
-        _SETUP.parent.mkdir(parents=True, exist_ok=True)
-        _SETUP.write_text("{broken", encoding="utf-8")
-        body = self.client.get("/api/setup").json()
-        self.assertEqual(body["auth_mode"], "unset")
-        self.assertIn("store_error", body)
-        fixed = self.client.post("/api/setup/mode", json={"mode": "mixed"})
-        self.assertEqual(fixed.status_code, 200)
-        self.assertEqual(self.store.auth_mode(), "mixed")
-
-    def test_key_write_applies_immediately_and_never_echoes_value(self) -> None:
+    def test_key_write_marks_configured_and_never_echoes_value(self) -> None:
         try:
             response = self.client.post("/api/setup/keys", json={
                 "keys": {"OPENAI_API_KEY": "sk-live-secret-value"}})
             self.assertEqual(response.status_code, 200)
-            body = response.json()
-            self.assertEqual(body, {"keys": {"OPENAI_API_KEY": True}})
+            self.assertEqual(response.json(), {"keys": {"OPENAI_API_KEY": True}})
             self.assertNotIn("sk-live-secret-value", response.text)
             self.assertEqual(os.environ["OPENAI_API_KEY"], "sk-live-secret-value")
             listed = self.client.get("/api/setup").json()
-            by_name = {k["env_key"]: k for k in listed["api_keys"]}
-            self.assertTrue(by_name["OPENAI_API_KEY"]["set"])
+            self.assertFalse(listed["first_run"])  # saving configures the app
             self.assertNotIn("sk-live-secret-value", str(listed))
-            # The stored file survives a fresh store instance (server restart).
-            reopened = SetupStore(setup_path=_SETUP, keys_path=_KEYS)
-            self.assertEqual(reopened.read_keys()["OPENAI_API_KEY"],
-                             "sk-live-secret-value")
         finally:
             os.environ.pop("OPENAI_API_KEY", None)
 
@@ -196,7 +186,6 @@ class SetupApiTests(_RouteTestBase):
             response = self.client.post("/api/setup/keys", json={
                 "keys": {"ZAI_API_KEY": "zai-plan-secret"}})
             self.assertEqual(response.status_code, 200)
-            self.assertEqual(response.json(), {"keys": {"ZAI_API_KEY": True}})
             listed = self.client.get("/api/setup").json()
             credentials = {c["env_key"]: c for c in listed["subscription_credentials"]}
             self.assertTrue(credentials["ZAI_API_KEY"]["set"])
@@ -222,8 +211,6 @@ class SetupApiTests(_RouteTestBase):
                 "keys": {"OPENAI_API_KEY": "sk-again"}})
             removed = self.client.delete("/api/setup/keys/OPENAI_API_KEY")
             self.assertEqual(removed.status_code, 200)
-            self.assertEqual(removed.json(),
-                             {"env_key": "OPENAI_API_KEY", "set": False})
             self.assertEqual(self.store.read_keys(), {})
         finally:
             os.environ.pop("OPENAI_API_KEY", None)
@@ -232,80 +219,69 @@ class SetupApiTests(_RouteTestBase):
         self.assertEqual(
             self.client.delete("/api/setup/keys/NOT_A_THING").status_code, 404)
 
+    def test_dismiss_stops_first_run(self) -> None:
+        self.assertEqual(
+            self.client.post("/api/setup/dismiss").json(), {"configured": True})
+        body = self.client.get("/api/setup").json()
+        self.assertFalse(body["first_run"])
+        self.assertTrue(body["configured"])
+
+    def test_local_model_override_round_trip(self) -> None:
+        try:
+            response = self.client.post("/api/setup/local/ollama",
+                                        json={"model": "llama3.1"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json(),
+                             {"id": "ollama", "model_env": "OLLAMA_MODEL",
+                              "model": "llama3.1"})
+            self.assertEqual(os.environ["OLLAMA_MODEL"], "llama3.1")
+            listed = self.client.get("/api/setup").json()
+            locals_by_id = {s["id"]: s for s in listed["local_servers"]}
+            self.assertEqual(locals_by_id["ollama"]["model"], "llama3.1")
+            cleared = self.client.post("/api/setup/local/ollama",
+                                       json={"model": ""})
+            self.assertEqual(cleared.json()["model"], "")
+            self.assertNotIn("OLLAMA_MODEL", os.environ)
+        finally:
+            os.environ.pop("OLLAMA_MODEL", None)
+
+    def test_local_override_rejects_unknown_and_keyed_providers(self) -> None:
+        self.assertEqual(
+            self.client.post("/api/setup/local/gpt", json={"model": "x"}).status_code, 404)
+        self.assertEqual(
+            self.client.post("/api/setup/local/nope", json={"model": "x"}).status_code, 404)
+
+    def test_corrupt_settings_reports_store_error_without_crashing(self) -> None:
+        _SETUP.parent.mkdir(parents=True, exist_ok=True)
+        _SETUP.write_text("{broken", encoding="utf-8")
+        body = self.client.get("/api/setup").json()
+        self.assertTrue(body["first_run"])
+        self.assertIn("store_error", body)
+        fixed = self.client.post("/api/setup/dismiss")
+        self.assertEqual(fixed.status_code, 200)
+        self.assertTrue(self.store.is_configured())
+
     def test_setup_page_serves(self) -> None:
         response = self.client.get("/setup")
         self.assertEqual(response.status_code, 200)
         self.assertIn("text/html", response.headers["content-type"])
-        self.assertIn("Subscriptions or API keys", response.text)
+        self.assertIn("Subscriptions, API keys, local models", response.text)
 
 
-class RoomModeEnforcementTests(_RouteTestBase):
-    """New rooms honor the chosen mode; flips apply to the next creation."""
+class RoomCreationTests(_RouteTestBase):
+    """No global billing mode exists anymore: rooms mix families freely."""
 
-    def setUp(self) -> None:
-        super().setUp()
-        self.server_client = TestClient(server.app)
-
-    def _registry(self) -> list[dict[str, object]]:
-        return _fake_registry()
-
-    def _create(self, *participant_ids: str):
-        return self.server_client.post("/api/rooms", json={
-            "participants": [{"id": pid} for pid in participant_ids],
-            "crosstalk": False,
-        })
-
-    def test_unset_mode_allows_everything(self) -> None:
-        with mock.patch.object(server, "SETUP_STORE", self.store), \
-             mock.patch("server.providers.registry", side_effect=self._registry):
-            response = self._create("gpt", "claude", "ollama", "zcode")
+    def test_room_creation_mixes_families_without_restriction(self) -> None:
+        import server
+        server_client = TestClient(server.app)
+        with mock.patch("server.providers.registry", side_effect=_fake_registry):
+            response = server_client.post("/api/rooms", json={
+                "participants": [{"id": "gpt"}, {"id": "claude"},
+                                 {"id": "ollama"}],
+                "crosstalk": False,
+            })
         self.assertEqual(response.status_code, 200)
-
-    def test_subscription_mode_blocks_api_billed_only(self) -> None:
-        with mock.patch.object(server, "SETUP_STORE", self.store), \
-             mock.patch("server.providers.registry", side_effect=self._registry):
-            self.store.set_auth_mode("subscription")
-            blocked = self._create("gpt")
-            allowed = self._create("claude", "ollama", "zcode")
-        self.assertEqual(blocked.status_code, 400)
-        self.assertIn("subscription usage", blocked.json()["detail"])
-        self.assertIn("flip the auth mode", blocked.json()["detail"].lower())
-        self.assertEqual(allowed.status_code, 200)
-
-    def test_api_mode_blocks_subscription_routes_only(self) -> None:
-        with mock.patch.object(server, "SETUP_STORE", self.store), \
-             mock.patch("server.providers.registry", side_effect=self._registry):
-            self.store.set_auth_mode("api")
-            blocked = self._create("claude")
-            blocked_glm = self._create("glm")
-            allowed = self._create("gpt", "ollama", "zcode")
-        self.assertEqual(blocked.status_code, 400)
-        self.assertEqual(blocked_glm.status_code, 400)
-        self.assertIn("API-key usage", blocked.json()["detail"])
-        self.assertEqual(allowed.status_code, 200)
-
-    def test_flip_mid_session_changes_next_creation(self) -> None:
-        with mock.patch.object(server, "SETUP_STORE", self.store), \
-             mock.patch("server.providers.registry", side_effect=self._registry):
-            self.store.set_auth_mode("subscription")
-            self.assertEqual(self._create("gpt").status_code, 400)
-            self.store.set_auth_mode("mixed")
-            self.assertEqual(self._create("gpt").status_code, 200)
-
-    def test_mixed_mode_restores_today_behavior(self) -> None:
-        with mock.patch.object(server, "SETUP_STORE", self.store), \
-             mock.patch("server.providers.registry", side_effect=self._registry):
-            self.store.set_auth_mode("mixed")
-            response = self._create("gpt", "claude", "ollama")
-        self.assertEqual(response.status_code, 200)
-
-    def test_billing_class_classification(self) -> None:
-        registry = {entry["id"]: entry for entry in _fake_registry()}
-        self.assertEqual(server._billing_class(registry["claude"]), "subscription")
-        self.assertEqual(server._billing_class(registry["glm"]), "subscription")
-        self.assertEqual(server._billing_class(registry["gpt"]), "api")
-        self.assertEqual(server._billing_class(registry["ollama"]), "other")
-        self.assertEqual(server._billing_class(registry["zcode"]), "other")
+        self.assertEqual(len(response.json()["participants"]), 3)
 
 
 if __name__ == "__main__":

@@ -24,17 +24,20 @@ Litigation installed.
 
 Next:
   1. ./start.sh
-  2. Open http://127.0.0.1:8766 — you'll be taken to /setup to choose
-     subscription logins or API keys (flippable any time from the top bar).
+  2. Open http://127.0.0.1:8766 — a first-run settings page covers
+     subscription logins, API keys, and local models (Ollama / LM Studio).
+     You pick subscription, API, and local participants per conversation
+     whenever you start a chat.
 
 Terminal client (same device, or point LITIGATION_URL at the server):
   litigation rooms
   litigation send <room-id> "address the court"
   litigation models
 
-Headless setup instead?  With the server running:
-  litigation setup --mode subscription
-  litigation setup --set ZAI_API_KEY
+Headless settings instead?  With the server running:
+  litigation setup --set OPENAI_API_KEY
+  litigation setup --local-model ollama=llama3.1
+  litigation setup --done
 EOF
 
 if [[ "${1:-}" == "--run" ]]; then

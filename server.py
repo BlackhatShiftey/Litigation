@@ -25,7 +25,7 @@ from seam_bridge import SeamBridge
 from seam_routes import create_seam_router
 from seam_sync import SeamSyncCoordinator
 from setup_routes import create_setup_router
-from setup_store import SetupStore
+from setup_store import SetupStore, SetupStoreError
 
 load_dotenv()
 
@@ -35,10 +35,15 @@ PROJECT_RUNTIME = runtime_from_environment(rules_store=RULES_STORE)
 SEAM_BRIDGE = SeamBridge()
 SEAM_SYNC = SeamSyncCoordinator(PROJECT_RUNTIME.store, SEAM_BRIDGE)
 PROJECT_RUNTIME.memory_bridge = SEAM_BRIDGE
-# Wizard-managed keys override the repository .env so the setup surface stays
-# authoritative once the user has chosen it.
+# Settings-managed keys and local model overrides win over the repository
+# .env so the settings surface stays authoritative once the user has used it.
+# A corrupt settings file must not block boot; the settings page reports it.
 SETUP_STORE = SetupStore()
 SETUP_STORE.load_keys_into()
+try:
+    SETUP_STORE.load_overrides_into()
+except SetupStoreError:
+    pass
 
 
 @asynccontextmanager
@@ -329,55 +334,11 @@ def rooms() -> list[dict[str, Any]]:
     return DB.list_rooms()
 
 
-def _billing_class(entry: dict[str, Any]) -> str:
-    """'subscription' (account-backed CLI), 'api' (pay-as-you-go key), or 'other'.
-
-    Local servers and non-subscription CLIs fall in 'other' and stay available
-    under every auth mode.
-    """
-    if entry.get("billing") == "subscription":
-        return "subscription"
-    if entry.get("api") != "cli" and entry.get("env_key"):
-        return "api"
-    return "other"
-
-
-def _reject_out_of_mode(participants: list[Any], known: dict[str, dict[str, Any]]) -> None:
-    """New rooms honor the chosen auth mode; existing rooms are never revisited."""
-    mode = SETUP_STORE.auth_mode()
-    if mode not in ("subscription", "api"):
-        return
-    for p in participants:
-        entry = known.get(str(p.get("id", "")))
-        if not entry:
-            continue
-        klass = _billing_class(entry)
-        if mode == "subscription" and klass == "api":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{entry['label']} is API-billed, but Litigation is set to "
-                    "subscription usage. Flip the auth mode in the top navigation "
-                    "or at /setup, then retry."
-                ),
-            )
-        if mode == "api" and klass == "subscription":
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    f"{entry['label']} uses a subscription login, but Litigation "
-                    "is set to API-key usage. Flip the auth mode in the top "
-                    "navigation or at /setup, then retry."
-                ),
-            )
-
-
 @app.post("/api/rooms")
 def create_room(body: RoomCreate) -> dict[str, Any]:
     if not body.participants:
         raise HTTPException(status_code=400, detail="a room needs at least one participant")
     known = {e["id"]: e for e in providers.registry()}
-    _reject_out_of_mode(body.participants, known)
     cleaned = []
     for p in body.participants:
         entry = known.get(str(p.get("id", "")))

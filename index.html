@@ -126,7 +126,7 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
 ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 </style>
 <link rel="stylesheet" href="/branding/canticle-cosmic.css?v=1.0.0">
-<link rel="stylesheet" href="/shared-nav.css?v=2.1.1">
+<link rel="stylesheet" href="/shared-nav.css?v=2.3.0">
 <link rel="stylesheet" href="/branding/litigation-canticle.css?v=1.0.1">
 <script src="/shared-nav.js" defer></script>
 </head>
@@ -255,14 +255,11 @@ async function refreshRooms() {
 const CHECKABLE_SUBSCRIPTIONS = new Set(['claude', 'grok', 'gemini', 'glm', 'cline', 'openai']);
 const SUBSCRIPTION_ORDER = ['grok', 'gemini', 'glm', 'cline', 'claude', 'openai', 'astra'];
 
+// Billing family is a per-conversation choice: every group is always shown
+// and whatever you check joins the room.
 const isSubscriptionBilled = (m) => m.billing === 'subscription';
 const isLocalServer = (m) => !!m.local;
 const isCliTransport = (m) => String(m.transport || '').toLowerCase().includes('cli');
-const isApiBilled = (m) => !isSubscriptionBilled(m) && !isLocalServer(m) && !isCliTransport(m);
-
-function authMode() {
-  return (state.setup && state.setup.auth_mode) || 'unset';
-}
 
 function providerGroups() {
   const byId = new Map(state.models.map(m => [m.id, m]));
@@ -273,39 +270,11 @@ function providerGroups() {
     ...subscription.filter(m => !SUBSCRIPTION_ORDER.includes(m.id)),
   ];
   const rest = state.models.filter(m => !isSubscriptionBilled(m) && m.id !== 'antigravity');
-  const localsAndCli = rest.filter(m => !isApiBilled(m));
-  const apiProviders = rest.filter(isApiBilled);
-  const mode = authMode();
-  if (mode === 'subscription') {
-    return [
-      ['Subscription accounts', orderedSubs],
-      ['Local servers & other CLIs', localsAndCli],
-    ];
-  }
-  if (mode === 'api') {
-    return [
-      ['API providers', apiProviders],
-      ['Local servers & other CLIs', localsAndCli],
-    ];
-  }
   return [
-    ['Subscription accounts', orderedSubs],
-    ['Other providers', rest],
+    ['Subscription models', orderedSubs],
+    ['API models', rest.filter(m => !isLocalServer(m))],
+    ['Local models', rest.filter(isLocalServer)],
   ];
-}
-
-function renderModeNote(wrap) {
-  const mode = authMode();
-  if (mode !== 'subscription' && mode !== 'api') return;
-  const note = document.createElement('div');
-  note.className = 'm-hint';
-  const hidden = mode === 'subscription'
-    ? 'API-billed providers are hidden'
-    : 'subscription CLI routes are hidden';
-  note.innerHTML =
-    `Auth mode: <strong>${mode === 'subscription' ? 'Subscriptions' : 'API keys'}</strong> — ${esc(hidden)}. ` +
-    'Flip the mode in the top navigation or <a href="/setup" style="color:var(--accent)">manage it in Setup</a>.';
-  wrap.appendChild(note);
 }
 
 async function refreshModels() {
@@ -341,7 +310,6 @@ function captureModelForm() {
 function renderModelRows(saved = {}) {
   const wrap = $('model-rows');
   wrap.innerHTML = '';
-  renderModeNote(wrap);
   for (const [title, models] of providerGroups()) {
     if (!models.length) continue;
     const heading = document.createElement('div');
@@ -356,9 +324,9 @@ function renderModelRows(saved = {}) {
         ? 'Subscription'
         : m.local
           ? 'Local'
-          : isApiBilled(m)
-            ? 'API billing'
-            : 'CLI account';
+          : isCliTransport(m)
+            ? 'CLI account'
+            : 'API billing';
       const hint = m.check_message || m.blocked_reason || m.setup_hint || '';
       const prior = saved[m.id] || {};
       const row = document.createElement('div');
@@ -728,25 +696,13 @@ $('code-btn').onclick = async () => {
   renderRoom();
 };
 
-// A flip from the shared navigation re-renders an open provider picker so the
-// new mode applies without closing the dialog.
-document.addEventListener('litigation:authmode', async () => {
-  try { state.setup = await api.setup(); } catch (e) { return; }
-  if ($('modal-bg').classList.contains('show')) {
-    try {
-      await refreshModels();
-      renderModelRows(captureModelForm());
-    } catch (e) { /* leave the current rows in place */ }
-  }
-});
-
 (async function init() {
   try {
     state.setup = await api.setup();
   } catch (e) {
-    // Setup endpoint unreachable: fall through and show the unfiltered picker.
+    // Settings endpoint unreachable: fall through and show the full picker.
   }
-  if (state.setup && state.setup.auth_mode === 'unset') {
+  if (state.setup && state.setup.first_run) {
     location.replace('/setup');
     return;
   }

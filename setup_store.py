@@ -1,16 +1,19 @@
-"""Durable setup preference and local key store for Litigation.
+"""Durable settings and local key store for Litigation.
 
-The store records how the user wants Litigation to authenticate inference —
-subscription logins, API keys, or both — and holds API-key values in a
-user-owned file outside the repository. It is deliberately self-contained
-(no chat, room, or database coupling) so the same surface can travel with
-Litigation when it is absorbed into another host such as SEAM.
+Litigation has no global billing mode: subscription vs API vs local models
+are selected per conversation in the New-chat dialog. This store holds what
+the settings page owns — API-key values in a user-owned file outside the
+repository, non-secret local model overrides, and a first-run marker so a
+fresh install can route to /setup exactly once.
 
 Preference file (JSON, atomic writes):
-    {"version": 1, "surface": "litigation", "auth_mode": "...", "chosen_at": "..."}
+    {"version": 1, "surface": "litigation", "configured_at": "...",
+     "model_overrides": {"OLLAMA_MODEL": "llama3.1"}}
 
-Key file (KEY=VALUE lines, 0600, atomic writes). Values are raw bytes on one
-line; newlines are rejected so a value can never forge another entry.
+Key file (KEY=VALUE lines, 0600, atomic writes). Values are single-line, so
+a value can never forge another entry. The module is deliberately
+self-contained (no chat, room, or database coupling) so the same surface can
+travel with Litigation when it is absorbed into another host such as SEAM.
 """
 from __future__ import annotations
 
@@ -22,11 +25,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-MODES = ("subscription", "api", "mixed")
-UNSET = "unset"
 _VERSION = 1
 _SURFACE = "litigation"
 _KEY_NAME = re.compile(r"^[A-Z][A-Z0-9_]*$")
+_MAX_OVERRIDE = 100
 
 
 class SetupStoreError(RuntimeError):
@@ -49,33 +51,69 @@ class SetupStore:
         self.setup_path = setup_path or default_setup_path()
         self.keys_path = keys_path or default_keys_path()
 
-    # -- preference ---------------------------------------------------------
+    # -- settings record ----------------------------------------------------
 
-    def auth_mode(self) -> str:
-        """One of MODES, or UNSET when no choice has been made yet."""
+    def _read_record(self) -> dict[str, Any]:
         if not self.setup_path.exists():
-            return UNSET
+            return {}
         try:
             data = json.loads(self.setup_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise SetupStoreError(
-                f"setup preference file is unreadable: {self.setup_path}") from exc
-        mode = data.get("auth_mode")
-        return mode if mode in MODES else UNSET
+                f"settings file is unreadable: {self.setup_path}") from exc
+        return data if isinstance(data, dict) else {}
 
-    def set_auth_mode(self, mode: str) -> dict[str, Any]:
-        if mode not in MODES:
-            raise SetupStoreError(f"unknown auth mode: {mode!r}")
-        record = {
-            "version": _VERSION,
-            "surface": _SURFACE,
-            "auth_mode": mode,
-            "chosen_at": datetime.now(timezone.utc).isoformat(),
-        }
-        _atomic_write(self.setup_path, (json.dumps(record, indent=2) + "\n").encode())
+    def _write_record(self, updates: dict[str, Any]) -> dict[str, Any]:
+        try:
+            record = self._read_record()
+        except SetupStoreError:
+            record = {}  # a corrupt file is replaced by the next write
+        record.setdefault("version", _VERSION)
+        record.setdefault("surface", _SURFACE)
+        record.update(updates)
+        _atomic_write(self.setup_path,
+                      (json.dumps(record, indent=2) + "\n").encode())
         return record
 
-    # -- API keys -----------------------------------------------------------
+    def is_configured(self) -> bool:
+        """False only on a fresh install that has never opened settings.
+
+        Raises SetupStoreError for an unreadable file so the settings page
+        can show it instead of silently treating it as a fresh install.
+        """
+        return bool(self._read_record())
+
+    def mark_configured(self) -> dict[str, Any]:
+        try:
+            record = self._read_record()
+        except SetupStoreError:
+            record = {}  # a corrupt file is replaced by this write
+        if "configured_at" not in record:
+            return self._write_record(
+                {"configured_at": datetime.now(timezone.utc).isoformat()})
+        return record
+
+    # -- local model overrides ------------------------------------------------
+
+    def model_overrides(self) -> dict[str, str]:
+        overrides = self._read_record().get("model_overrides") or {}
+        return {str(k): str(v) for k, v in overrides.items()
+                if _KEY_NAME.match(str(k))}
+
+    def set_model_override(self, env_name: str, value: str | None) -> None:
+        if not _KEY_NAME.match(env_name):
+            raise SetupStoreError(f"invalid setting name: {env_name!r}")
+        overrides = self.model_overrides()
+        if value is None or value == "":
+            overrides.pop(env_name, None)
+        else:
+            if len(value) > _MAX_OVERRIDE or any(
+                    ch in value for ch in ("\n", "\r")):
+                raise SetupStoreError("model overrides must be single-line and short")
+            overrides[env_name] = value
+        self._write_record({"model_overrides": overrides})
+
+    # -- API keys -------------------------------------------------------------
 
     def read_keys(self) -> dict[str, str]:
         if not self.keys_path.exists():
@@ -132,6 +170,13 @@ class SetupStore:
         for name, value in keys.items():
             target[name] = value
         return sorted(keys)
+
+    def load_overrides_into(self, env: dict[str, str] | None = None) -> list[str]:
+        overrides = self.model_overrides()
+        target = os.environ if env is None else env
+        for name, value in overrides.items():
+            target[name] = value
+        return sorted(overrides)
 
 
 def _atomic_write(path: Path, payload: bytes, *, private: bool = False) -> None:

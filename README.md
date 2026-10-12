@@ -29,14 +29,16 @@ them, then call a vote and let the whole room decide.
 ./start.sh
 ```
 
-Open <http://127.0.0.1:8766>. On a fresh install you're taken to `/setup` to
-choose how Litigation authenticates inference — **your subscriptions** (each
-provider's locally signed-in CLI) or **API keys** (pay-as-you-go, stored in a
-local `0600` file and applied without a restart). The choice is flippable any
-time from the segmented control in the top navigation; new rooms follow the
-current mode while existing rooms keep the routes they were created with.
-Headless installs can use `python3 litigation_cli.py setup --mode …` and
-`--set KEY`. Details: [docs/SETUP.md](docs/SETUP.md).
+Open <http://127.0.0.1:8766>. A first-run settings page covers the three
+provider families — **subscription logins** (each provider's locally
+signed-in CLI, plus GLM's Z.ai credential), **API keys** (pay-as-you-go,
+stored in a local `0600` file and applied without a restart), and **local
+models** (Ollama / LM Studio with running-status probes and model
+overrides). There is no global billing switch: when you start a chat you
+pick subscription, API, and local participants side by side in the New-chat
+dialog — the choice is per conversation. Headless installs can use
+`litigation setup --set KEY`, `--local-model ollama=llama3.1`, and `--done`.
+Details: [docs/SETUP.md](docs/SETUP.md).
 
 Click **New chat** and use **Test connection** beside each subscription
 provider. A CLI being installed is shown as **Installed · not verified** until
@@ -79,7 +81,7 @@ litigation send <id> "review this" --target grok --mode code
 litigation vote <id> "ship or hold?"
 litigation models                        # provider availability + billing
 litigation check claude                  # subscription connection check
-litigation setup --mode subscription     # headless install-time choice
+litigation setup --set OPENAI_API_KEY    # headless key/setting management
 ```
 
 The same command also covers the durable Projects workflow (handoffs, debates,

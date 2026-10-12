@@ -9,13 +9,6 @@ const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
 const CHECKABLE = new Set(["claude", "grok", "gemini", "glm", "cline", "openai"]);
 const SUBSCRIPTION_ORDER = ["grok", "gemini", "glm", "cline", "claude", "openai", "astra"];
 
-const MODE_LABELS = {
-  subscription: "Subscriptions",
-  api: "API keys",
-  mixed: "All providers",
-  unset: "Not chosen yet",
-};
-
 const state = { setup: null, models: [] };
 
 const api = {
@@ -26,9 +19,11 @@ const api = {
   },
   setup: () => api.json("/api/setup"),
   models: () => api.json("/api/models"),
-  setMode: (mode) => api.json("/api/setup/mode", {method: "POST", body: JSON.stringify({mode})}),
+  dismiss: () => api.json("/api/setup/dismiss", {method: "POST"}),
   setKeys: (keys) => api.json("/api/setup/keys", {method: "POST", body: JSON.stringify({keys})}),
   clearKey: (name) => api.json("/api/setup/keys/" + encodeURIComponent(name), {method: "DELETE"}),
+  setLocalModel: (id, model) => api.json("/api/setup/local/" + encodeURIComponent(id),
+                                          {method: "POST", body: JSON.stringify({model})}),
   checkModel: (id) => api.json("/api/models/" + encodeURIComponent(id) + "/check", {method: "POST"}),
 };
 
@@ -54,20 +49,25 @@ function modelStatus(m) {
   return [labels[m.setup_status] || "Not verified", ""];
 }
 
-function renderModeState() {
-  const mode = state.setup ? state.setup.auth_mode : "unset";
-  const box = $("mode-state");
-  box.innerHTML = `<div class="current">Auth mode: ${esc(MODE_LABELS[mode] || mode)}</div>` +
-    (state.setup && state.setup.store_error
-      ? `<p class="warn">${esc(state.setup.store_error)}</p>` : "");
-  $("card-subscription").classList.toggle("active", mode === "subscription");
-  $("card-api").classList.toggle("active", mode === "api");
+function renderSetupState() {
+  const box = $("setup-state");
+  const s = state.setup;
+  const firstRun = s ? s.first_run : false;
+  const keyCount = (s ? s.api_keys : []).filter((k) => k.set).length;
+  const credCount = (s ? s.subscription_credentials : []).filter((k) => k.set).length;
+  const locals = (s ? s.local_servers : []).filter((l) => l.reachable).length;
+  box.innerHTML =
+    `<div class="current">${firstRun ? "First run — configure your providers" : "Providers configured"}</div>` +
+    `<div class="counts">${keyCount} API key${keyCount === 1 ? "" : "s"} · ` +
+    `${credCount} subscription credential${credCount === 1 ? "" : "s"} · ` +
+    `${locals} local server${locals === 1 ? "" : "s"} running</div>` +
+    (s && s.store_error ? `<p class="warn">${esc(s.store_error)}</p>` : "");
 }
 
 function renderSubscriptions() {
   const wrap = $("sub-providers");
-  const subscription = state.models.filter(
-    (m) => m.billing === "subscription" && m.id !== "antigravity");
+  const wanted = new Set(state.setup ? state.setup.subscription_ids : []);
+  const subscription = state.models.filter((m) => wanted.has(m.id));
   const byId = new Map(subscription.map((m) => [m.id, m]));
   const ordered = [
     ...SUBSCRIPTION_ORDER.map((id) => byId.get(id)).filter(Boolean),
@@ -128,28 +128,49 @@ function renderKeys() {
   $("zai-state").innerHTML = zai
     ? (zai.set
         ? '<span class="set">Credential set ✓</span> — GLM subscription route is configured.'
-        : "Not set — the GLM route needs this credential even in subscription mode.")
+        : "Not set — the GLM route needs this credential even though it is subscription-billed.")
     : "";
+}
+
+function renderLocalServers() {
+  const wrap = $("local-servers");
+  const servers = (state.setup && state.setup.local_servers) || [];
+  if (!servers.length) {
+    wrap.innerHTML = '<div class="hint">No local servers are registered. Start Ollama (<code>ollama serve</code>) or LM Studio and reload.</div>';
+    return;
+  }
+  wrap.innerHTML = "";
+  for (const server of servers) {
+    const card = document.createElement("div");
+    card.className = "local-card";
+    card.innerHTML =
+      `<div class="local-head">
+         <span class="dot ${server.reachable ? "on" : ""}"></span>
+         <div>
+           <div class="name">${esc(server.label)}</div>
+           <div class="meta">${esc(server.base_url)} · default ${esc(server.default_model || "?")}</div>
+         </div>
+         <span class="status ${server.reachable ? "verified" : "error"}">${server.reachable ? "Running" : "Not running"}</span>
+       </div>
+       <div class="credential-row">
+         <input type="text" data-local="${esc(server.id)}" value="${esc(server.model)}"
+                placeholder="model id (default: ${esc(server.default_model || "")})"
+                title="Model override applied immediately and persisted in settings">
+         <button type="button" class="secondary save-local" data-id="${esc(server.id)}">Save model</button>
+       </div>
+       ${server.reachable ? "" : '<div class="hint">Start the server, then reload this page to re-check.</div>'}`;
+    wrap.appendChild(card);
+  }
 }
 
 async function refresh() {
   const [setup, models] = await Promise.all([api.setup(), api.models()]);
   state.setup = setup;
   state.models = models;
-  renderModeState();
+  renderSetupState();
   renderSubscriptions();
   renderKeys();
-}
-
-async function chooseMode(mode) {
-  try {
-    await api.setMode(mode);
-    document.dispatchEvent(new CustomEvent("litigation:authmode", {detail: {mode}}));
-    await refresh();
-    message(`Auth mode set to ${MODE_LABELS[mode] || mode}. New rooms follow it; existing rooms keep their routes.`, "ok");
-  } catch (e) {
-    message(e.message, "err");
-  }
+  renderLocalServers();
 }
 
 async function saveKeys(inputs) {
@@ -173,13 +194,18 @@ async function saveKeys(inputs) {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
-  $("use-subscription").addEventListener("click", () => chooseMode("subscription"));
-  $("use-api").addEventListener("click", () => chooseMode("api"));
-  $("use-mixed").addEventListener("click", () => chooseMode("mixed"));
   $("save-keys").addEventListener("click", () =>
     saveKeys($("api-keys").querySelectorAll("input[data-key]")));
-  $("save-zai").addEventListener("click", () =>
-    saveKeys([$("zai-key")]));
+  $("save-zai").addEventListener("click", () => saveKeys([$("zai-key")]));
+  $("finish-setup").addEventListener("click", async () => {
+    try {
+      await api.dismiss();
+      await refresh();
+      message("Setup finished. Start a chat and pick subscription, API, and local models side by side.", "ok");
+    } catch (e) {
+      message(e.message, "err");
+    }
+  });
   $("api-keys").addEventListener("click", async (event) => {
     const button = event.target.closest("button.clear");
     if (!button) return;
@@ -207,8 +233,20 @@ document.addEventListener("DOMContentLoaded", () => {
       message(e.message, "err");
     }
   });
-  document.addEventListener("litigation:authmode", () => {
-    api.setup().then((setup) => { state.setup = setup; renderModeState(); }).catch(() => {});
+  $("local-servers").addEventListener("click", async (event) => {
+    const button = event.target.closest("button.save-local");
+    if (!button) return;
+    const input = document.querySelector(`input[data-local="${button.dataset.id}"]`);
+    if (!input) return;
+    button.disabled = true;
+    try {
+      await api.setLocalModel(button.dataset.id, input.value.trim());
+      await refresh();
+      message(`${button.dataset.id} model saved.`, "ok");
+    } catch (e) {
+      button.disabled = false;
+      message(e.message, "err");
+    }
   });
-  refresh().catch((e) => message("Could not load setup state: " + e.message, "err"));
+  refresh().catch((e) => message("Could not load settings: " + e.message, "err"));
 });

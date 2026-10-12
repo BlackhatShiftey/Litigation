@@ -18,72 +18,58 @@ document.addEventListener("DOMContentLoaded", () => {
       window.history.replaceState({}, "", "/");
     }
   }
-  mountAuthModeControl();
+  mountSettingsLink();
+  mountAlpineStatus();
 });
 
-/* Runtime flip between subscription usage and API keys. Mounted on every
-   page that includes this script; persists through POST /api/setup/mode and
-   broadcasts a document-level "litigation:authmode" event so open dialogs
-   can re-render without a reload. */
-function mountAuthModeControl() {
+/* A single gear link into the provider settings page. Provider billing is
+   chosen per conversation in the New-chat dialog, not globally, so there is
+   no mode control here anymore. */
+function mountSettingsLink() {
   const actions = document.querySelector(".litigation-nav__actions");
-  if (!actions || document.querySelector(".litigation-nav__auth")) return;
-
-  const group = document.createElement("div");
-  group.className = "litigation-nav__auth";
-  group.setAttribute("role", "group");
-  group.setAttribute("aria-label", "Inference billing mode");
-  const labels = [["subscription", "Subscriptions"], ["api", "API keys"], ["mixed", "All"]];
-  for (const [mode, label] of labels) {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.dataset.mode = mode;
-    button.textContent = label;
-    button.title = `New rooms use ${label === "All" ? "every provider" : label}`;
-    group.appendChild(button);
-  }
-
+  if (!actions || document.querySelector(".litigation-nav__setup")) return;
   const manage = document.createElement("a");
   manage.className = "litigation-nav__setup";
   manage.href = "/setup";
-  manage.title = "Auth mode and API key management";
+  manage.title = "Provider settings — subscriptions, API keys, local models";
+  manage.setAttribute("aria-label", "Provider settings");
   manage.textContent = "⚙";
+  actions.prepend(manage);
+}
 
-  actions.prepend(group, manage);
+/* Alpine (SEAM) connection chip on every page, not just Knowledge. The
+   status endpoint probes the host over SSH, so its result is cached in
+   sessionStorage and refreshed at most every few minutes. */
+function mountAlpineStatus() {
+  const actions = document.querySelector(".litigation-nav__actions");
+  if (!actions || document.querySelector(".litigation-nav__alpine")) return;
+  const chip = document.createElement("a");
+  chip.className = "litigation-nav__alpine";
+  chip.href = "/knowledge";
+  chip.title = "SEAM knowledge service on Alpine (private Tailscale link)";
+  chip.innerHTML =
+    '<span class="alpine-dot" aria-hidden="true"></span><span class="alpine-text">Alpine</span>';
+  actions.prepend(chip);
 
-  const reflect = (mode) => {
-    for (const button of group.querySelectorAll("button")) {
-      button.setAttribute("aria-pressed", String(button.dataset.mode === mode));
-    }
-    document.body.dataset.authMode = mode || "unset";
-  };
-
-  group.addEventListener("click", async (event) => {
-    const button = event.target.closest("button[data-mode]");
-    if (!button || button.getAttribute("aria-pressed") === "true") return;
-    button.disabled = true;
-    try {
-      const response = await fetch("/api/setup/mode", {
-        method: "POST",
-        headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({mode: button.dataset.mode}),
-      });
-      if (!response.ok) throw new Error((await response.json().catch(() => ({}))).detail || response.statusText);
-      reflect(button.dataset.mode);
-      document.dispatchEvent(new CustomEvent("litigation:authmode", {detail: {mode: button.dataset.mode}}));
-    } catch (error) {
-      group.title = `Could not change auth mode: ${error.message}`;
-    } finally {
-      button.disabled = false;
-    }
-  });
-
-  fetch("/api/setup")
-    .then((response) => response.ok ? response.json() : null)
-    .then((state) => reflect(state && state.auth_mode))
-    .catch(() => group.remove());
-
-  document.addEventListener("litigation:authmode", (event) => {
-    reflect(event.detail && event.detail.mode);
-  });
+  const apply = (state) => { chip.dataset.state = state; };
+  const TTL = 5 * 60 * 1000;
+  let cached = null;
+  try {
+    cached = JSON.parse(sessionStorage.getItem("litigation.alpine") || "null");
+  } catch (_) { /* corrupted cache entry: just re-probe */ }
+  if (cached && Date.now() - cached.at < TTL) {
+    apply(cached.state);
+    return;
+  }
+  fetch("/api/seam/status")
+    .then((response) => (response.ok ? response.json() : null))
+    .then((status) => {
+      const state = status && status.reachable && status.installed ? "ok" : "down";
+      try {
+        sessionStorage.setItem("litigation.alpine",
+                               JSON.stringify({state, at: Date.now()}));
+      } catch (_) { /* private mode: the chip just loses its cache */ }
+      apply(state);
+    })
+    .catch(() => apply("down"));
 }

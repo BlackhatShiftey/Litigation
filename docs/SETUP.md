@@ -1,83 +1,86 @@
-# Litigation setup surface — subscription vs API keys
+# Litigation provider settings — subscriptions, API keys, local models
 
-Litigation asks **at install time** how it should authenticate inference —
-subscription logins or pay-as-you-go API keys — and keeps the choice flippable
-**during use**. The whole surface lives behind `/setup` and `/api/setup` and is
-deliberately self-contained so it can travel with Litigation when the project
-is absorbed as a surface into SEAM.
+Litigation has **no global billing mode**. Subscription models, API-key
+models, and local models are three provider families you configure once in
+the settings page and then **select per conversation** in the New-chat
+dialog — a room can mix all three. There is deliberately no mode control in
+the top navigation.
 
-## First run and the runtime flip
+## The settings page (`/setup`)
 
-- A fresh install has no recorded choice. Opening `/` redirects to `/setup`,
-  which offers **Use my subscriptions**, **Use API keys**, and **Decide later**
-  (which persists `mixed` and shows every provider).
-- Every page's shared navigation carries a segmented control —
-  **Subscriptions · API keys · All** — that flips the mode with one click via
-  `POST /api/setup/mode`. No restart is needed; an open provider picker
-  re-renders immediately.
-- Headless installs use the CLI against the same endpoints:
+Open it via the ⚙ gear in the top bar (or `http://127.0.0.1:8766/setup`).
+It has one section per family:
 
-```bash
-python3 litigation_cli.py setup --mode subscription
-python3 litigation_cli.py setup --set ZAI_API_KEY     # hidden prompt
-python3 litigation_cli.py setup --clear OPENAI_API_KEY
-python3 litigation_cli.py setup --status
-```
+- **Subscription models** — each account-backed CLI with live status, its
+  login hint, a **Test connection** button, and the GLM · Z.ai Coding Plan
+  credential field (`ZAI_API_KEY`), which that route needs even though it is
+  subscription-billed.
+- **API keys · cloud models** — one password field per pay-as-you-go key.
+  Values are written to a local `0600` file and applied to the running
+  server immediately; they are never echoed back, only shown as set ✓.
+- **Local models** — its own section for Ollama and LM Studio (and any
+  keyless `LITIGATION_EXTRA_MODELS` endpoints): live running/not-running
+  probe of the local port, the default model, and a persisted model
+  override per server.
 
-## Mode semantics
+A fresh install redirects `/` here exactly once. **Finish setup** (or any
+save action) records that settings were visited and stops the redirect.
 
-- The mode governs **new rooms only**. Existing rooms keep the participants
-  and billing routes they were created with; a flip never silently changes
-  billing mid-conversation.
-- `subscription` — new rooms may use subscription CLI routes, local servers,
-  and non-subscription CLIs; API-billed providers are rejected with a message
-  pointing at the flip control.
-- `api` — new rooms may use API-billed providers, local servers, and
-  non-subscription CLIs; subscription CLI routes are rejected the same way.
-- `mixed` / unset-choice-recorded — everything is offered (today's behavior
-  minus the redirect).
-- Local servers (Ollama, LM Studio) never need a key and stay available under
-  every mode.
-- GLM's subscription route authenticates with the `ZAI_API_KEY` credential
-  rather than a CLI login, so the subscription card collects it explicitly.
+## Per-conversation selection
+
+The New-chat dialog lists three groups — **Subscription models**,
+**API models**, and **Local models** — and everything is always offered.
+Check any combination; the billing family is a property of each participant
+you pick, not of the room or the app. Existing rooms keep the participants
+they were created with. This replaces the earlier global auth-mode control.
 
 ## API
 
 | Endpoint | Purpose |
 | --- | --- |
-| `GET /api/setup` | Auth mode, per-key set/unset booleans, subscription credential state |
-| `POST /api/setup/mode` | Persist `subscription`, `api`, or `mixed` |
+| `GET /api/setup` | Family inventory: subscription ids, per-key set/unset booleans, credential state, local servers with reachability and model overrides |
 | `POST /api/setup/keys` | Store/clear keys (`{"keys": {"OPENAI_API_KEY": "…"}}`; empty value clears) |
 | `DELETE /api/setup/keys/{ENV}` | Remove one stored key |
+| `POST /api/setup/local/{id}` | Set a local server's model override (`{"model": "llama3.1"}`; empty clears) |
+| `POST /api/setup/dismiss` | Mark settings visited (stops the one-time redirect) |
 
-Key names are validated against the provider registry (`env_key` entries plus
-subscription `required_env` credentials like `ZAI_API_KEY`); unknown names are
-rejected without touching the store.
+Key names are validated against the provider registry (`env_key` entries
+plus subscription `required_env` credentials like `ZAI_API_KEY`); unknown
+names are rejected without touching the store.
 
 ## Storage, precedence, and security
 
 | Store | Default path | Override |
 | --- | --- | --- |
-| Preference JSON (versioned, `surface: "litigation"`) | `~/.local/share/litigation/setup.json` | `LITIGATION_SETUP_PATH` |
+| Settings JSON (versioned, `surface: "litigation"`, model overrides, first-run marker) | `~/.local/share/litigation/setup.json` | `LITIGATION_SETUP_PATH` |
 | Key file (`KEY=VALUE`, `0600`, atomic writes) | `~/.config/litigation/keys.env` | `LITIGATION_KEYS_PATH` |
 
-- The key file loads after the repository `.env` and overrides it, so the
-  setup surface stays authoritative once the user has chosen it. Values are
+- Keys and model overrides load after the repository `.env` and override it,
+  so the settings surface stays authoritative once used. Key values are
   single-line only; a value can never forge another entry.
 - Key values arrive over the loopback-only server (equivalent trust to
-  hand-editing `.env`), are applied to the process environment immediately,
-  and are **never echoed back** — API responses carry set/unset booleans only.
-- An unreadable preference file is reported as a visible `store_error` in
-  `GET /api/setup`; choosing a mode replaces it. It never crashes the server.
+  hand-editing `.env`), apply to the process environment immediately, and
+  are **never echoed back** — responses carry set/unset booleans only.
+- An unreadable settings file never blocks boot; `GET /api/setup` reports it
+  as a visible `store_error`, and the next save replaces it.
+
+## Headless configuration
+
+```bash
+litigation setup --set OPENAI_API_KEY      # hidden prompt
+litigation setup --local-model ollama=llama3.1
+litigation setup --clear OPENAI_API_KEY
+litigation setup --done                    # stop the first-run redirect
+litigation setup --status
+```
 
 ## SEAM absorption design notes
 
-- `setup_store.py` has no chat, room, or database coupling; the preference
+- `setup_store.py` has no chat, room, or database coupling; the settings
   record is versioned and tagged with `surface: "litigation"` so a future
-  host can migrate or rename it deliberately.
-- `setup_routes.py` owns the page, static assets, and API behind `/setup` and
-  `/api/setup` only. Re-hosting the surface means re-mounting one router.
-- The navigation flip control is injected by `shared-nav.js`, which every
-  surface already loads.
-- The only enforcement point is new-room creation in the server; rooms,
-  transcripts, sends, projects, and rules are untouched by mode changes.
+  host can migrate it deliberately.
+- `setup_routes.py` owns the page, static assets, and API behind `/setup`
+  and `/api/setup` only. Re-hosting the surface means re-mounting one router.
+- The only chat-side integration is the New-chat dialog's grouping and the
+  one-time first-run redirect; rooms, transcripts, sends, projects, and
+  rules are untouched by settings changes.
