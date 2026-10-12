@@ -63,6 +63,28 @@ worktrees, bounded evidence, and phased acceptance tests. The repository's
 [source-available licensing proposal](docs/LICENSING_PROPOSAL.md) is also
 pending an owner decision and does not grant license rights.
 
+## Terminal CLI
+
+`install.sh` puts a `litigation` command on your PATH (a symlink to
+`litigation_cli.py`, pure stdlib) that plugs into the terminal of the device
+the server runs on — and, with `LITIGATION_URL` set, into any terminal that
+can reach the server (for example Termux over Tailscale):
+
+```bash
+litigation rooms                         # list chat rooms
+litigation room <id> --limit 20          # room + recent transcript
+litigation new-room -p grok -p claude --crosstalk
+litigation send <id> "address the court" # streams replies live, token by token
+litigation send <id> "review this" --target grok --mode code
+litigation vote <id> "ship or hold?"
+litigation models                        # provider availability + billing
+litigation check claude                  # subscription connection check
+litigation setup --mode subscription     # headless install-time choice
+```
+
+The same command also covers the durable Projects workflow (handoffs, debates,
+proposals, shared work) — see `litigation --help`.
+
 ## Subscription accounts
 
 The subscription group in the new-room dialog uses the accounts already

@@ -10,6 +10,15 @@ python3 -m venv .venv
 .venv/bin/pip install --quiet --upgrade pip
 .venv/bin/pip install --quiet -r requirements.txt
 
+# Put the terminal client on PATH as `litigation`.
+chmod +x litigation_cli.py
+mkdir -p "${HOME}/.local/bin"
+ln -sf "${repo_dir}/litigation_cli.py" "${HOME}/.local/bin/litigation"
+case ":${PATH}:" in
+  *":${HOME}/.local/bin:"*) ;;
+  *) echo "note: add ~/.local/bin to your PATH to run 'litigation' directly" ;;
+esac
+
 cat <<'EOF'
 Litigation installed.
 
@@ -18,9 +27,14 @@ Next:
   2. Open http://127.0.0.1:8766 — you'll be taken to /setup to choose
      subscription logins or API keys (flippable any time from the top bar).
 
-Headless instead?  With the server running:
-  python3 litigation_cli.py setup --mode subscription
-  python3 litigation_cli.py setup --set ZAI_API_KEY
+Terminal client (same device, or point LITIGATION_URL at the server):
+  litigation rooms
+  litigation send <room-id> "address the court"
+  litigation models
+
+Headless setup instead?  With the server running:
+  litigation setup --mode subscription
+  litigation setup --set ZAI_API_KEY
 EOF
 
 if [[ "${1:-}" == "--run" ]]; then

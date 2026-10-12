@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Local CLI for Litigation's durable Projects API."""
+"""Terminal client for a local Litigation server.
+
+Plugs into the terminal of the device it runs on: chat rooms with live
+streamed replies, court votes, provider checks, plus the durable Projects
+and setup APIs. Uses only the standard library, targets the server at
+LITIGATION_URL (default http://127.0.0.1:8766), and never stores secrets.
+"""
 from __future__ import annotations
 
 import argparse
@@ -12,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable, Iterator
 
 
 DEFAULT_URL = os.environ.get("LITIGATION_URL", "http://127.0.0.1:8766").rstrip("/")
@@ -49,11 +55,38 @@ def print_json(value: Any) -> None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="litigation",
-        description="Delegate durable local project work to subscription-backed agents.",
+        description=("Terminal client for the local Litigation server: chat rooms, "
+                     "court votes, provider checks, durable projects, and setup."),
     )
     parser.add_argument("--url", default=DEFAULT_URL, help="Litigation server URL")
     commands = parser.add_subparsers(dest="command", required=True)
 
+    # -- terminal chat surface ----------------------------------------------
+    commands.add_parser("rooms", help="list chat rooms")
+    room = commands.add_parser("room", help="show one room with recent transcript")
+    room.add_argument("room_id")
+    room.add_argument("--limit", type=int, default=20)
+    new_room = commands.add_parser("new-room", help="create a chat room")
+    new_room.add_argument("--participant", action="append", required=True,
+                          metavar="ID", help="participant id (repeatable)")
+    new_room.add_argument("--title", default="")
+    new_room.add_argument("--crosstalk", action="store_true",
+                          help="enable decoder-ring cross-talk")
+    send = commands.add_parser(
+        "send", help="send a message and stream the room's replies live")
+    send.add_argument("room_id")
+    send.add_argument("text")
+    send.add_argument("--target", action="append", default=[], metavar="ID",
+                      help="address only these agents (repeatable; default everyone)")
+    send.add_argument("--mode", choices=("chat", "code"), default="chat")
+    vote = commands.add_parser("vote", help="call a court vote in a room")
+    vote.add_argument("room_id")
+    vote.add_argument("question", nargs="?", default="")
+    commands.add_parser("models", help="list provider states")
+    check = commands.add_parser("check", help="run a subscription connection check")
+    check.add_argument("model_id")
+
+    # -- durable projects ----------------------------------------------------
     commands.add_parser("projects", help="list projects")
     create = commands.add_parser("create-project", help="create a managed local Git project")
     create.add_argument("name")
@@ -182,11 +215,114 @@ def wait_for(handoff_id: str, *, url: str, interval: float = 1.0) -> dict[str, A
         time.sleep(max(0.1, interval))
 
 
+def iter_sse(lines: Iterable[bytes | bytearray | str]) -> Iterator[dict[str, Any]]:
+    """Yield JSON events from Server-Sent-Events ``data:`` lines."""
+    for raw in lines:
+        line = raw.decode("utf-8", "replace") if isinstance(raw, (bytes, bytearray)) else raw
+        line = line.rstrip("\n")
+        if not line.startswith("data: "):
+            continue
+        try:
+            event = json.loads(line[len("data: "):])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict):
+            yield event
+
+
+def stream_turn(url: str, room_id: str, body: dict[str, Any],
+                out: Any = None) -> int:
+    """POST a chat turn and render the SSE reply stream to the terminal.
+
+    API providers stream token deltas; subscription CLI replies arrive as one
+    ``done`` event. Returns a process exit code (non-zero if any agent erred).
+    """
+    out = sys.stdout if out is None else out
+    req = urllib.request.Request(
+        url + f"/api/rooms/{urllib.parse.quote(room_id)}/send",
+        data=json.dumps(body).encode("utf-8"), method="POST",
+        headers={"Content-Type": "application/json", "Accept": "text/event-stream"})
+    streamed: set[str] = set()
+    started = False
+    failed = False
+    try:
+        with urllib.request.urlopen(req, timeout=900) as response:
+            for event in iter_sse(response):
+                kind = event.get("type")
+                agent = str(event.get("agent", ""))
+                if kind == "start":
+                    if started:
+                        print(file=out)
+                    print(f"▸ {event.get('label', agent)}", file=out)
+                    started = True
+                elif kind == "delta":
+                    out.write(str(event.get("text", "")))
+                    out.flush()
+                    streamed.add(agent)
+                elif kind == "done":
+                    if agent in streamed:
+                        print(file=out)
+                    else:
+                        content = str(event.get("content", "")).strip()
+                        if content:
+                            print(content, file=out)
+                elif kind == "diff":
+                    print(f"  [diff] {event.get('files', '?')} file(s) changed "
+                          f"(full diff in the room transcript)", file=out)
+                elif kind == "ring":
+                    print(f"  ◇ ring {event.get('label', agent)}: "
+                          f"{event.get('decoded', '')}", file=out)
+                elif kind == "phase":
+                    print(f"— {event.get('phase')} —", file=out)
+                elif kind == "error":
+                    failed = True
+                    print(f"  ✗ {agent}: {event.get('error', 'failed')}",
+                          file=sys.stderr)
+    except urllib.error.HTTPError as exc:
+        raw = exc.read()
+        try:
+            detail = json.loads(raw).get("detail", f"HTTP {exc.code}")
+        except (json.JSONDecodeError, AttributeError):
+            detail = f"HTTP {exc.code}"
+        raise RuntimeError(str(detail)) from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"cannot reach Litigation at {url}") from exc
+    if started:
+        print(file=out)
+    return 1 if failed else 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     url = args.url.rstrip("/")
     try:
-        if args.command == "projects":
+        if args.command == "rooms":
+            result = request("GET", "/api/rooms", url=url)
+        elif args.command == "room":
+            room = request("GET", f"/api/rooms/{urllib.parse.quote(args.room_id)}", url=url)
+            room["messages"] = room.get("messages", [])[-max(1, args.limit):]
+            result = room
+        elif args.command == "new-room":
+            result = request("POST", "/api/rooms", {
+                "participants": [{"id": p} for p in args.participant],
+                "title": args.title, "crosstalk": args.crosstalk,
+            }, url=url)
+        elif args.command == "send":
+            return stream_turn(url, args.room_id, {
+                "text": args.text,
+                "targets": args.target or None,
+                "mode": args.mode,
+            })
+        elif args.command == "vote":
+            result = request("POST", f"/api/rooms/{urllib.parse.quote(args.room_id)}/vote",
+                             {"question": args.question}, url=url)
+        elif args.command == "models":
+            result = request("GET", "/api/models", url=url)
+        elif args.command == "check":
+            result = request("POST",
+                             f"/api/models/{urllib.parse.quote(args.model_id)}/check",
+                             url=url)
+        elif args.command == "projects":
             result = request("GET", "/api/projects", url=url)
         elif args.command == "create-project":
             result = request("POST", "/api/projects", {

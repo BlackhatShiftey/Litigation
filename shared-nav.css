@@ -40,6 +40,7 @@
 .litigation-nav__tabs {
   min-width: 0;
   display: flex;
+  flex-wrap: nowrap;
   align-items: center;
   gap: 4px;
   overflow-x: auto;
@@ -166,6 +167,14 @@
 .litigation-nav__setup:hover {
   border-color: var(--cc-orbit, #3dbfff);
   color: var(--cc-ink, #f1f3ff);
+}
+
+/* Medium widths: drop the informational extras before the tabs ever lose
+   room. The lockup stays; the product word and status badge go. */
+@media (max-width: 1100px) {
+  .litigation-nav__product { display: none; }
+  .litigation-nav__status { display: none; }
+  .litigation-nav__auth button { padding: 6px 8px; }
 }
 
 @media (max-width: 720px) {

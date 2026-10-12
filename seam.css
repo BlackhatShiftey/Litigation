@@ -16,9 +16,8 @@ body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.5 Inte
 a { color: inherit; text-decoration: none; }
 .topbar { height: 58px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 32px; padding: 0 30px; background: #0d1116; }
 .brand { color: var(--amber); font-weight: 750; letter-spacing: .04em; }
-nav { display: flex; flex-wrap: wrap; gap: 8px; min-width: 0; }
-nav a { padding: 7px 11px; color: var(--muted); border-radius: 5px; }
-nav a:hover, nav a[aria-current="page"] { color: var(--text); background: var(--panel-2); }
+/* The workspace tabs are styled by shared-nav.css (.litigation-nav__tabs);
+   bare `nav` rules here previously forced flex-wrap and stacked the tabs. */
 .badge { margin-left: auto; border: 1px solid var(--line); border-radius: 99px; padding: 4px 10px; font-size: 12px; }
 .badge.good { color: var(--green); border-color: #275d49; }
 .badge.bad { color: var(--red); border-color: #633a38; }

@@ -6,6 +6,32 @@
 `http://127.0.0.1:8766`. All five subscription connection checks and a shared
 chat turn passed on 2026-10-10. Changes are uncommitted.
 
+## 2026-10-12 — Knowledge nav fix + terminal CLI
+
+**Nav regression fix.** On the Knowledge page at ~933px the workspace tabs
+stacked vertically and "Knowledge" dropped below the bar. Root cause:
+`seam.css` still carried bare `nav { flex-wrap: wrap }` rules from the old
+topbar; once the shared nav's auth-mode control widened the actions area, the
+tabs column lost room and wrapped. Fixes: removed the stale bare-nav rules
+from `seam.css`, added `flex-wrap: nowrap` to `.litigation-nav__tabs` in
+`shared-nav.css` (v2.1.1, defends against page CSS), and a ≤1100px tier that
+hides the status badge and product word before tabs ever lose room. Browser
+measurement at 933px confirms one row, no overflow, all tabs visible.
+
+**Terminal CLI.** `litigation_cli.py` is now a full terminal client for the
+chat surface, and `install.sh` symlinks it onto PATH as `litigation`
+(→ `~/.local/bin/litigation`, pure stdlib, `LITIGATION_URL` to point at
+another host — e.g. Termux over Tailscale). New commands: `rooms`, `room`,
+`new-room`, `send` (live SSE streaming with token deltas, ring, diff, and
+error events; errors go to stderr and set the exit code), `vote`, `models`,
+and `check`. `tests/test_cli_chat.py` covers the SSE parser, stream
+rendering, error translation, and argument shapes. Live-verified against the
+restarted server, including a real streamed turn (error path) and cleanup.
+
+The 8766 server was restarted onto the current code (60 rooms preserved).
+First visit to `/` now redirects to `/setup` because no auth mode is recorded
+yet. Prior setup-surface work is documented in its section below.
+
 ## 2026-10-12 — Install-time auth choice: subscriptions vs API keys
 
 Installers now choose how Litigation authenticates inference, and the choice
