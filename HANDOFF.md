@@ -6,6 +6,21 @@
 `http://127.0.0.1:8766`. All five subscription connection checks and a shared
 chat turn passed on 2026-10-10. Changes are uncommitted.
 
+## 2026-10-12 — Add counsel mid-conversation
+
+Rooms are no longer frozen at creation. `PATCH /api/rooms/{id}` now accepts
+`participants` with replacement semantics: the client sends the full roster,
+unknown ids and empty rosters are rejected (400) without touching the room,
+and an entry without an explicit model keeps its current model. The chat UI
+gains a **+ Counsel** button in the room topbar that reopens the provider
+picker in add mode — current participants excluded, workspace/crosstalk
+controls hidden, title and action read "Add models to \<room\>" / "Add to
+room" — and merges the picks into the roster. The CLI mirrors it:
+`litigation add-model <room> -p grok -p "ollama=llama3.1"` (ID=MODEL sets an
+override). Five new tests in `tests/test_setup_routes.py`
+(`RoomParticipantUpdateTests`) cover add/merge, rejection atomicity, model
+fallback, and 404s; 32 setup+CLI tests pass.
+
 ## 2026-10-12 — Per-conversation billing families + three-section settings
 
 **Direction change.** The global auth-mode control is gone: subscription,

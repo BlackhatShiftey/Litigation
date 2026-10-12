@@ -148,7 +148,8 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
     <div id="room-title"></div>
     <span class="pill" id="room-members"></span>
     <button class="topbtn" id="crosstalk-btn" title="Let agents see and reply to each other via the decoder ring">Ring: off</button>
-    <button class="topbtn" id="code-btn" title="Coding mode: qualified coding agents edit the shared workspace; chat-only subscription agents can review without file access">Code: off</button>
+    <button class="topbtn" id="code-btn" title="Coding mode: qualified coding agents edit the shared workspace; chat-only subscription agents review without file access">Code: off</button>
+    <button class="topbtn" id="add-counsel-btn" title="Add models to this room — subscription, API, or local, even mid-conversation">+ Counsel</button>
     <button class="topbtn" id="vote-btn" title="Ask every participant for a verdict">⚖ Call vote</button>
   </div>
   <div id="chat"></div>
@@ -164,7 +165,7 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
 </div>
 <div id="modal-bg">
   <div id="modal">
-    <h2>New chat room</h2>
+    <h2 id="modal-title">New chat room</h2>
     <div id="model-rows"></div>
     <input type="text" id="ws-input" placeholder="Shared git workspace for coding mode (optional) — e.g. ~/Projects/myapp"
            style="width:100%; box-sizing:border-box; margin:10px 0 2px; padding:8px 10px; background:var(--bg3); border:1px solid var(--border); border-radius:6px; color:var(--text); font-size:12px;">
@@ -307,16 +308,17 @@ function captureModelForm() {
   return values;
 }
 
-function renderModelRows(saved = {}) {
+function renderModelRows(saved = {}, excludeIds = null) {
   const wrap = $('model-rows');
   wrap.innerHTML = '';
   for (const [title, models] of providerGroups()) {
-    if (!models.length) continue;
+    const visible = models.filter(m => !excludeIds || !excludeIds.has(m.id));
+    if (!visible.length) continue;
     const heading = document.createElement('div');
     heading.className = 'model-group';
     heading.textContent = title;
     wrap.appendChild(heading);
-    for (const m of models) {
+    for (const m of visible) {
       const subscription = isSubscriptionBilled(m);
       const [status, statusClass] = modelStatus(m);
       const transport = m.transport || 'provider API';
@@ -345,12 +347,42 @@ function renderModelRows(saved = {}) {
   }
 }
 
+// The picker serves two modes: creating a room, or adding counsel to an
+// already-started conversation.
+let modalMode = 'create';
+
+function setModalMode(mode) {
+  modalMode = mode;
+  const adding = mode === 'add';
+  $('modal-title').textContent = adding
+    ? `Add models to ${state.room ? state.room.title : 'this room'}`
+    : 'New chat room';
+  $('create-btn').textContent = adding ? 'Add to room' : 'Open room';
+  $('ws-input').style.display = adding ? 'none' : '';
+  const ctLabel = $('ct-check').closest('label');
+  if (ctLabel) ctLabel.style.display = adding ? 'none' : '';
+}
+
 async function openModal() {
+  setModalMode('create');
   $('modal-bg').classList.add('show');
   $('model-rows').innerHTML = '<div class="model-group">Refreshing provider status…</div>';
   try {
     await refreshModels();
     renderModelRows();
+  } catch (e) {
+    $('model-rows').innerHTML = `<div class="m-hint">Could not refresh providers: ${esc(e.message)}</div>`;
+  }
+}
+
+async function openAddModal() {
+  if (!state.room) return;
+  setModalMode('add');
+  $('modal-bg').classList.add('show');
+  $('model-rows').innerHTML = '<div class="model-group">Refreshing provider status…</div>';
+  try {
+    await refreshModels();
+    renderModelRows({}, new Set(state.room.participants.map(p => p.id)));
   } catch (e) {
     $('model-rows').innerHTML = `<div class="m-hint">Could not refresh providers: ${esc(e.message)}</div>`;
   }
@@ -363,7 +395,8 @@ async function checkModel(id, button) {
   try {
     await api.checkModel(id);
     await refreshModels();
-    renderModelRows(saved);
+    renderModelRows(saved, modalMode === 'add'
+      ? new Set(state.room.participants.map(p => p.id)) : null);
   } catch (e) {
     button.disabled = false;
     button.textContent = 'Try again';
@@ -371,7 +404,7 @@ async function checkModel(id, button) {
   }
 }
 
-async function createRoom() {
+function pickedParticipants() {
   const participants = [];
   for (const row of $('model-rows').querySelectorAll('.model-row')) {
     const cb = row.querySelector('input[type=checkbox]');
@@ -379,7 +412,21 @@ async function createRoom() {
     const override = row.querySelector('input[type=text]').value.trim();
     participants.push({id: cb.dataset.id, ...(override ? {model: override} : {})});
   }
+  return participants;
+}
+
+async function createRoom() {
+  const participants = pickedParticipants();
   if (!participants.length) { alert('Pick at least one model.'); return; }
+  if (modalMode === 'add') {
+    state.room = await api.patchRoom(state.room.id, {
+      participants: [...state.room.participants, ...participants]});
+    $('modal-bg').classList.remove('show');
+    syncAgentMeta();
+    renderRoom();
+    refreshRooms();
+    return;
+  }
   const room = await api.createRoom({
     participants, crosstalk: $('ct-check').checked,
     workspace: $('ws-input').value.trim()});
@@ -666,6 +713,7 @@ async function callVote() {
 /* ---------------- Wire-up ---------------- */
 
 $('new-room-btn').onclick = openModal;
+$('add-counsel-btn').onclick = openAddModal;
 $('model-rows').onclick = (e) => {
   const button = e.target.closest('.check-model');
   if (button) checkModel(button.dataset.id, button);

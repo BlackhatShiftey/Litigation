@@ -284,5 +284,64 @@ class RoomCreationTests(_RouteTestBase):
         self.assertEqual(len(response.json()["participants"]), 3)
 
 
+class RoomParticipantUpdateTests(_RouteTestBase):
+    """Counsel can be added to a room after the conversation started."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        import server
+        self.server_client = TestClient(server.app)
+        patcher = mock.patch("server.providers.registry",
+                             side_effect=_fake_registry)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        created = self.server_client.post("/api/rooms", json={
+            "participants": [{"id": "claude"}], "crosstalk": False})
+        self.assertEqual(created.status_code, 200)
+        self.room_id = created.json()["id"]
+
+    def test_add_models_mid_conversation(self) -> None:
+        response = self.server_client.patch(f"/api/rooms/{self.room_id}", json={
+            "participants": [
+                {"id": "claude"},          # keeps its existing model
+                {"id": "gpt"},
+                {"id": "ollama", "model": "llama3.1"},
+            ]})
+        self.assertEqual(response.status_code, 200)
+        by_id = {p["id"]: p for p in response.json()["participants"]}
+        self.assertEqual(set(by_id), {"claude", "gpt", "ollama"})
+        self.assertEqual(by_id["ollama"]["model"], "llama3.1")
+        self.assertEqual(by_id["claude"]["model"], "test-model")
+        # the roster survives a fresh read
+        reread = self.server_client.get(f"/api/rooms/{self.room_id}").json()
+        self.assertEqual(len(reread["participants"]), 3)
+
+    def test_unknown_participant_is_rejected_without_changing_the_room(self) -> None:
+        before = self.server_client.get(f"/api/rooms/{self.room_id}").json()
+        response = self.server_client.patch(f"/api/rooms/{self.room_id}", json={
+            "participants": [{"id": "claude"}, {"id": "not-a-model"}]})
+        self.assertEqual(response.status_code, 400)
+        after = self.server_client.get(f"/api/rooms/{self.room_id}").json()
+        self.assertEqual(after["participants"], before["participants"])
+
+    def test_empty_roster_is_rejected(self) -> None:
+        response = self.server_client.patch(f"/api/rooms/{self.room_id}",
+                                            json={"participants": []})
+        self.assertEqual(response.status_code, 400)
+
+    def test_missing_participant_model_falls_back_to_current(self) -> None:
+        patched = self.server_client.patch(f"/api/rooms/{self.room_id}", json={
+            "participants": [{"id": "claude", "model": "custom-x"}]})
+        self.assertEqual(patched.json()["participants"][0]["model"], "custom-x")
+        again = self.server_client.patch(f"/api/rooms/{self.room_id}", json={
+            "participants": [{"id": "claude"}]})
+        self.assertEqual(again.json()["participants"][0]["model"], "custom-x")
+
+    def test_unknown_room_is_404(self) -> None:
+        self.assertEqual(
+            self.server_client.patch("/api/rooms/missing", json={
+                "participants": [{"id": "claude"}]}).status_code, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

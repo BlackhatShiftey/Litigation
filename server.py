@@ -381,6 +381,26 @@ async def patch_room(room_id: str, body: dict[str, Any]) -> dict[str, Any]:
     if "workspace" in body:
         ws = str(body["workspace"] or "").strip()
         updates["workspace"] = await _resolve_workspace(ws) if ws else None
+    if "participants" in body:
+        # Replacement semantics: the client sends the full new roster, so a
+        # room can gain (or drop) counsel after the conversation started.
+        requested = body.get("participants") or []
+        if not requested:
+            raise HTTPException(status_code=400, detail="a room needs at least one participant")
+        known = {e["id"]: e for e in providers.registry()}
+        existing = {p["id"]: dict(p) for p in room["participants"]}
+        cleaned = []
+        for p in requested:
+            entry = known.get(str(p.get("id", "")))
+            if not entry:
+                raise HTTPException(status_code=400,
+                                    detail=f"unknown participant: {p.get('id')}")
+            current = existing.get(entry["id"], {})
+            cleaned.append({
+                "id": entry["id"], "label": entry["label"],
+                "model": str(p.get("model") or current.get("model") or entry["model"]),
+            })
+        updates["participants"] = cleaned
     DB.update_room(room_id, **updates)
     return DB.get_room(room_id)  # type: ignore[return-value]
 

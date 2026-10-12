@@ -67,7 +67,7 @@ def build_parser() -> argparse.ArgumentParser:
     room.add_argument("room_id")
     room.add_argument("--limit", type=int, default=20)
     new_room = commands.add_parser("new-room", help="create a chat room")
-    new_room.add_argument("--participant", action="append", required=True,
+    new_room.add_argument("-p", "--participant", action="append", required=True,
                           metavar="ID", help="participant id (repeatable)")
     new_room.add_argument("--title", default="")
     new_room.add_argument("--crosstalk", action="store_true",
@@ -82,6 +82,11 @@ def build_parser() -> argparse.ArgumentParser:
     vote = commands.add_parser("vote", help="call a court vote in a room")
     vote.add_argument("room_id")
     vote.add_argument("question", nargs="?", default="")
+    add_model = commands.add_parser(
+        "add-model", help="add models to a room that already started")
+    add_model.add_argument("room_id")
+    add_model.add_argument("-p", "--participant", action="append", required=True,
+                           metavar="ID", help="participant id (repeatable; ID=MODEL to override)")
     commands.add_parser("models", help="list provider states")
     check = commands.add_parser("check", help="run a subscription connection check")
     check.add_argument("model_id")
@@ -318,6 +323,16 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "vote":
             result = request("POST", f"/api/rooms/{urllib.parse.quote(args.room_id)}/vote",
                              {"question": args.question}, url=url)
+        elif args.command == "add-model":
+            room = request("GET", f"/api/rooms/{urllib.parse.quote(args.room_id)}", url=url)
+            additions = []
+            for spec in args.participant:
+                participant_id, _, model = spec.partition("=")
+                additions.append({"id": participant_id,
+                                  **({"model": model} if model else {})})
+            result = request("PATCH", f"/api/rooms/{urllib.parse.quote(args.room_id)}", {
+                "participants": room.get("participants", []) + additions,
+            }, url=url)
         elif args.command == "models":
             result = request("GET", "/api/models", url=url)
         elif args.command == "check":

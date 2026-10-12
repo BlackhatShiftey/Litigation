@@ -6,7 +6,9 @@ them, then call a vote and let the whole room decide.
 
 ## Features
 
-- **Multi-model rooms** — pick any combination of providers per chat room.
+- **Multi-model rooms** — pick any combination of providers per chat room,
+  and add more counsel mid-conversation with **+ Counsel** (subscription,
+  API, and local models side by side).
 - **Selective addressing** — chips above the composer toggle which models hear
   your next message (empty selection = everyone).
 - **Decoder ring ("Ring") cross-talk** — when enabled, after answering you the
@@ -79,6 +81,7 @@ litigation new-room -p grok -p claude --crosstalk
 litigation send <id> "address the court" # streams replies live, token by token
 litigation send <id> "review this" --target grok --mode code
 litigation vote <id> "ship or hold?"
+litigation add-model <id> -p grok -p "ollama=llama3.1"  # mid-conversation
 litigation models                        # provider availability + billing
 litigation check claude                  # subscription connection check
 litigation setup --set OPENAI_API_KEY    # headless key/setting management
@@ -165,7 +168,8 @@ Omit `env_key` (or leave it empty) for a local server that needs no key; set
 GET  /api/models                     → available providers
 POST /api/models/{id}/check          → safe subscription connection check
 GET/POST /api/rooms                  → list / create rooms
-GET/PATCH/DELETE /api/rooms/{id}     → room + transcript
+GET/PATCH/DELETE /api/rooms/{id}     → room + transcript (PATCH adds/drops
+                                      participants on a started room)
 POST /api/rooms/{id}/send            → SSE stream (start/delta/done/ring/error)
 POST /api/rooms/{id}/vote            → tallied verdicts
 GET/POST /api/projects               → list / create managed projects
