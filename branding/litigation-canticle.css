@@ -1,0 +1,327 @@
+/* Canticle Litigation adaptation layer.
+ * Loaded after page CSS and the vendored Canticle Cosmic UI Kit.
+ */
+
+body.cc-cosmic {
+  --cc-night: #1a1b26;
+  --cc-void: #16161e;
+  --cc-panel: #202131;
+  --cc-well: #13131a;
+  --cc-bubble: #26283d;
+  --cc-ink: #f1f3ff;
+  --cc-ink-muted: #b7bfdf;
+  --cc-ink-quiet: #8993bc;
+  --cc-line: #3d405d;
+  --cc-line-bright: #64698f;
+  --cc-plasma: #ff2d6f;
+  --cc-magenta: #ff6090;
+  --cc-lavender: #b57cff;
+  --cc-orbit: #3dbfff;
+  --cc-mint: #7fdc3a;
+  --cc-aqua: #73daca;
+  --cc-danger: #ff6b81;
+  --cc-blue: #7aa2f7;
+  --cc-font-display: "Outfit", "Arial Rounded MT Bold", system-ui, sans-serif;
+  --cc-font-body: "Outfit", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --cc-font-utility: "Fira Code", "JetBrains Mono", "Cascadia Mono", ui-monospace, monospace;
+  min-width: 0;
+  background: var(--cc-night);
+  color: var(--cc-ink);
+  font-family: var(--cc-font-body);
+}
+
+body.litigation-chat {
+  --bg: var(--cc-night);
+  --bg2: var(--cc-void);
+  --bg3: var(--cc-panel);
+  --border: var(--cc-line);
+  --text: var(--cc-ink);
+  --dim: var(--cc-ink-muted);
+  --accent: var(--cc-magenta);
+  --user: #315ca8;
+}
+
+body.litigation-projects {
+  --ink: var(--cc-night);
+  --chamber: var(--cc-void);
+  --docket: var(--cc-panel);
+  --rule: var(--cc-line);
+  --paper: var(--cc-ink);
+  --muted: var(--cc-ink-muted);
+  --amber: var(--cc-magenta);
+  --blue: var(--cc-orbit);
+  --green: var(--cc-mint);
+  --red: var(--cc-danger);
+}
+
+body.litigation-rules {
+  --ink: var(--cc-ink);
+  --muted: var(--cc-ink-muted);
+  --base: var(--cc-night);
+  --panel: var(--cc-void);
+  --raised: var(--cc-panel);
+  --rule: var(--cc-line);
+  --amber: var(--cc-magenta);
+  --amber-wash: rgba(255, 45, 111, 0.1);
+  --green: var(--cc-mint);
+  --red: var(--cc-danger);
+  --blue: var(--cc-orbit);
+}
+
+body.litigation-knowledge {
+  --bg: var(--cc-night);
+  --panel: var(--cc-void);
+  --panel-2: var(--cc-panel);
+  --line: var(--cc-line);
+  --text: var(--cc-ink);
+  --muted: var(--cc-ink-muted);
+  --amber: var(--cc-magenta);
+  --green: var(--cc-mint);
+  --red: var(--cc-danger);
+}
+
+.cc-cosmic :where(h1, h2, h3, h4, h5, h6) {
+  color: var(--cc-ink);
+  font-family: var(--cc-font-display);
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.cc-cosmic :where(code, pre, .repo-line, .namespace, .eyebrow, .position, .rail-label) {
+  font-family: var(--cc-font-utility);
+}
+
+.cc-cosmic :where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--cc-orbit);
+  outline-offset: 3px;
+  box-shadow: 0 0 0 3px var(--cc-night), 0 0 0 6px rgba(61, 191, 255, 0.42);
+}
+
+.cc-cosmic :where(input, select, textarea) {
+  border-color: var(--cc-line-bright);
+  border-radius: 10px;
+  background: var(--cc-well);
+  color: var(--cc-ink);
+  caret-color: var(--cc-plasma);
+}
+
+.cc-cosmic :where(input, textarea)::placeholder { color: var(--cc-ink-quiet); }
+.cc-cosmic :where(input, select, textarea):hover { border-color: var(--cc-orbit); }
+
+.cc-cosmic :where(.primary, #send, #create-btn, .query-row button:not(.secondary), .hero > button) {
+  border: 1px solid var(--cc-plasma);
+  border-radius: 10px;
+  background: var(--cc-plasma);
+  color: #16161e;
+  box-shadow: 2px 3px 0 var(--cc-well);
+  font-family: var(--cc-font-utility);
+  font-weight: 750;
+}
+
+.cc-cosmic :where(.primary, #send, #create-btn, .query-row button:not(.secondary), .hero > button):hover {
+  border-color: var(--cc-orbit);
+  background: #ff6090;
+  filter: none;
+}
+
+.cc-cosmic :where(.quiet, .icon-button, .topbtn, .check-model, #cancel-btn, button.secondary) {
+  border-color: var(--cc-line-bright);
+  border-radius: 9px;
+  background: var(--cc-panel);
+  color: var(--cc-ink);
+  font-family: var(--cc-font-utility);
+}
+
+.cc-cosmic :where(.quiet, .icon-button, .topbtn, .check-model, #cancel-btn, button.secondary):hover {
+  border-color: var(--cc-orbit);
+  color: var(--cc-orbit);
+}
+
+.cc-cosmic :where(dialog, #modal) {
+  border: 2px solid var(--cc-line-bright);
+  border-radius: 18px;
+  background: var(--cc-panel);
+  color: var(--cc-ink);
+  box-shadow: 6px 7px 0 var(--cc-well), 0 24px 80px rgba(0, 0, 0, 0.55);
+}
+
+.cc-cosmic dialog::backdrop,
+.cc-cosmic #modal-bg { background: rgba(10, 10, 17, 0.78); }
+
+.cc-cosmic :where(.status-chip, .pill, .badge, .m-badge, .tchip) {
+  border-color: var(--cc-line-bright);
+  border-radius: 999px;
+  color: var(--cc-ink-muted);
+  font-family: var(--cc-font-utility);
+}
+
+.cc-cosmic :where(.global-error, .notice.error, .form-error) { color: #ff9aac; }
+.cc-cosmic :where(.global-notice, .notice.success, .live-note) { color: #aeea84; }
+
+/* Chat */
+.litigation-chat #sidebar,
+.litigation-chat #topbar,
+.litigation-chat #composer-wrap { background: var(--cc-void); }
+
+.litigation-chat #sidebar { border-color: var(--cc-line); }
+
+.litigation-chat .room-item.active {
+  background: var(--cc-panel);
+  outline-color: var(--cc-lavender);
+  box-shadow: inset 3px 0 0 var(--cc-plasma);
+}
+
+.litigation-chat .msg .bubble {
+  border-color: var(--cc-line-bright);
+  border-radius: 16px;
+  background: var(--cc-bubble);
+}
+
+.litigation-chat .msg.user .bubble {
+  border-color: rgba(61, 191, 255, 0.62);
+  background: rgba(61, 191, 255, 0.12);
+}
+
+.litigation-chat .msg.ring-msg .bubble { border-color: var(--cc-lavender); }
+.litigation-chat .verdict-card { border-color: var(--cc-plasma); border-radius: 16px; }
+.litigation-chat .verdict-card .vh { background: rgba(255, 45, 111, 0.12); color: var(--cc-magenta); }
+.litigation-chat .bar-row .bar { background: var(--cc-plasma); }
+.litigation-chat #input { min-width: 0; border-radius: 14px; }
+.litigation-chat #send { min-width: 76px; }
+.litigation-chat #send {
+  border: 1px solid var(--cc-plasma);
+  background: var(--cc-plasma);
+  color: var(--cc-void);
+}
+.litigation-chat #send:hover { border-color: var(--cc-orbit); background: #ff6090; }
+.litigation-chat .model-row.subscription {
+  border-color: var(--cc-line-bright);
+  background: transparent;
+}
+.litigation-chat #empty-state .big { color: var(--cc-plasma); filter: saturate(0.8); }
+.litigation-chat .diffview,
+.litigation-chat .raw-view { background: var(--cc-well); color: var(--cc-ink-muted); }
+
+/* Projects and rules */
+.litigation-projects .project-rail,
+.litigation-projects .project-header,
+.litigation-projects .tab-bar,
+.litigation-rules .rule-index,
+.litigation-rules .view-tabs { background: var(--cc-void); }
+
+.litigation-projects .tab-bar { overflow-y: hidden; }
+.litigation-projects .evidence-pane { background: var(--cc-void); }
+
+.litigation-projects .rules-strip,
+.litigation-projects .provenance-banner,
+.litigation-rules .authority-strip { background: var(--cc-well); }
+
+.litigation-projects .empty-mark { color: var(--cc-plasma); font-family: var(--cc-font-display); }
+.litigation-projects .empty-project h1,
+.litigation-projects .project-heading h1,
+.litigation-projects .dialog-head h2,
+.litigation-projects .agent-execution-head h3,
+.litigation-rules .rule-header h1 { font-family: var(--cc-font-display); font-weight: 650; }
+
+.litigation-projects .project-list button.active,
+.litigation-projects .activity-row.active { box-shadow: inset 3px 0 0 var(--cc-plasma); }
+
+.litigation-projects .tab-bar button[aria-selected="true"]::after,
+.litigation-rules .view-tabs button[aria-selected="true"] { border-color: var(--cc-plasma); }
+
+.litigation-projects :where(.work-item-card, .active-agent-card, .execution-receipt, .check-card),
+.litigation-rules :where(.history-item, .proposal-card) {
+  border-color: var(--cc-line);
+  border-radius: 12px;
+  background: var(--cc-panel);
+}
+
+.litigation-projects :where(.output-paper, .diff-paper, #file-content, .receipt-json, .check-output),
+.litigation-rules :where(.rule-paper, .history-item pre, .proposal-card pre) {
+  background: var(--cc-well);
+  color: var(--cc-ink);
+}
+
+.litigation-projects .agent-execution-head,
+.litigation-rules .rule-header { background: var(--cc-void); }
+
+.litigation-rules .rule-paper {
+  border-color: var(--cc-line-bright);
+  box-shadow: 6px 7px 0 var(--cc-well);
+}
+
+.litigation-rules .rule-paper pre {
+  color: var(--cc-ink);
+  font-family: var(--cc-font-body);
+}
+
+.litigation-rules .scope-list .sigil,
+.litigation-rules .position,
+.litigation-rules .origin,
+.litigation-projects .eyebrow,
+.litigation-projects .namespace { color: var(--cc-magenta); }
+
+/* Knowledge */
+.litigation-knowledge main { color: var(--cc-ink); }
+.litigation-knowledge .hero h1 { font-family: var(--cc-font-display); font-weight: 650; }
+.litigation-knowledge .eyebrow { color: var(--cc-mint) !important; }
+.litigation-knowledge :where(.status-grid, .workspace, .ledger-panel) {
+  border-color: var(--cc-line);
+  border-radius: 14px;
+  overflow: hidden;
+}
+.litigation-knowledge .status-grid { gap: 1px; background: var(--cc-line); }
+.litigation-knowledge :where(.status-grid article, .workspace aside, .result, .ledger-panel) { background: var(--cc-panel); }
+.litigation-knowledge .query-panel { background: var(--cc-void); }
+.litigation-knowledge .result { border-radius: 10px; }
+.litigation-knowledge .result .meta,
+.litigation-knowledge .namespace { color: var(--cc-orbit); }
+.litigation-knowledge .outbox-row { background: var(--cc-void); }
+
+@media (max-width: 640px) {
+  .litigation-chat .chat-shell {
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .litigation-chat #sidebar {
+    width: 100%;
+    min-width: 0;
+    max-height: 27vh;
+    flex: 0 0 auto;
+  }
+
+  .litigation-chat #main { min-height: 0; flex: 1 1 auto; }
+  .litigation-chat #chat { padding-block: 10px; }
+  .litigation-chat #composer { align-items: stretch; }
+  .litigation-chat #send { padding-inline: 12px; }
+  .litigation-chat .msg .bubble { border-radius: 13px; }
+
+  .litigation-chat .model-row {
+    grid-template-columns: 18px 10px minmax(0, 1fr);
+    align-items: start;
+  }
+
+  .litigation-chat .model-row > input[type="checkbox"] { grid-column: 1; grid-row: 1; margin-top: 3px; }
+  .litigation-chat .model-row > .dot { grid-column: 2; grid-row: 1; margin-top: 4px; }
+  .litigation-chat .model-row > div:nth-child(3) { grid-column: 3; grid-row: 1; min-width: 0; }
+  .litigation-chat .model-row > input[type="text"] { grid-column: 1 / -1; width: 100%; }
+  .litigation-chat .model-row > .check-model { grid-column: 1 / -1; width: 100%; }
+  .litigation-chat .model-row > span:nth-child(5):empty { display: none; }
+  .litigation-chat .model-row > .m-hint { grid-column: 1 / -1; }
+
+  .litigation-knowledge .status-grid { grid-template-columns: 1fr 1fr; }
+  .litigation-knowledge .status-grid article:last-child { grid-column: 1 / -1; }
+  .litigation-knowledge .section-title { align-items: flex-start; flex-direction: column; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cc-cosmic *,
+  .cc-cosmic *::before,
+  .cc-cosmic *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}

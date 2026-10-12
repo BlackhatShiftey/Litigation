@@ -3,14 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Rules · Litigation</title>
+<title>Rules · Canticle Litigation</title>
 <link rel="stylesheet" href="/rules.css">
-<link rel="stylesheet" href="/shared-nav.css">
+<link rel="stylesheet" href="/branding/canticle-cosmic.css?v=1.0.0">
+<link rel="stylesheet" href="/shared-nav.css?v=2.1.0">
+<link rel="stylesheet" href="/branding/litigation-canticle.css?v=1.0.1">
 <script src="/shared-nav.js" defer></script>
 </head>
-<body>
+<body class="cc-cosmic litigation-rules">
+<a class="cc-skip-link" href="#main-content">Skip to workspace</a>
 <header class="litigation-nav">
-  <a class="litigation-nav__brand" href="/"><span aria-hidden="true">⚖</span>Litigation</a>
+  <a class="litigation-nav__brand cc-brand" href="/" aria-label="Canticle Litigation home"><img src="/branding/canticle-lockup.svg?v=1.0.0" alt="Canticle"><span class="litigation-nav__product">Litigation</span></a>
   <nav class="litigation-nav__tabs" aria-label="Workspace sections">
     <a href="/">Chat</a><a href="/projects">Projects</a><a href="/rules" aria-current="page">Rules</a><a href="/knowledge">Knowledge</a>
   </nav>
@@ -29,7 +32,7 @@
     <div class="index-foot">Published revisions are permanent. Changes add history; they never replace it.</div>
   </aside>
 
-  <main class="rule-workbench">
+  <main class="rule-workbench" id="main-content">
     <div class="notice error" id="error" role="alert" hidden></div>
     <div class="notice success" id="notice" role="status" hidden></div>
     <header class="rule-header">

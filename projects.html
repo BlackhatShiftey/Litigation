@@ -3,14 +3,17 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Projects · Litigation</title>
+<title>Projects · Canticle Litigation</title>
 <link rel="stylesheet" href="/projects.css">
-<link rel="stylesheet" href="/shared-nav.css">
+<link rel="stylesheet" href="/branding/canticle-cosmic.css?v=1.0.0">
+<link rel="stylesheet" href="/shared-nav.css?v=2.1.0">
+<link rel="stylesheet" href="/branding/litigation-canticle.css?v=1.0.1">
 <script src="/shared-nav.js" defer></script>
 </head>
-<body>
+<body class="cc-cosmic litigation-projects">
+<a class="cc-skip-link" href="#main-content">Skip to workspace</a>
 <header class="litigation-nav">
-  <a class="litigation-nav__brand" href="/"><span aria-hidden="true">⚖</span>Litigation</a>
+  <a class="litigation-nav__brand cc-brand" href="/" aria-label="Canticle Litigation home"><img src="/branding/canticle-lockup.svg?v=1.0.0" alt="Canticle"><span class="litigation-nav__product">Litigation</span></a>
   <nav class="litigation-nav__tabs" aria-label="Workspace sections">
     <a href="/">Chat</a><a href="/projects" aria-current="page">Projects</a><a href="/rules">Rules</a><a href="/knowledge">Knowledge</a>
   </nav>
@@ -28,7 +31,7 @@
     <div class="rail-foot">Local workspace. Nothing is published or pushed to a remote.</div>
   </aside>
 
-  <main class="workbench">
+  <main class="workbench" id="main-content">
     <div class="global-error" id="global-error" role="alert" hidden></div>
     <div class="global-notice" id="global-notice" role="status" hidden></div>
     <section class="empty-project" id="empty-project">

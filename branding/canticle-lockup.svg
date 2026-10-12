@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 148 48" role="img" aria-labelledby="canticle-lockup-title canticle-lockup-desc" data-brand-kit="canticle-seam@1.0.0" data-motion="rgb-cycle cursor-blink">
+  <title id="canticle-lockup-title">Canticle</title>
+  <desc id="canticle-lockup-desc">Terminal prompt and cursor in a bordered square followed by the Canticle wordmark.</desc>
+  <rect x="1" y="9" width="42" height="30" rx="7" fill="#0a0b0a" stroke="#ff6090" stroke-width="1.5"></rect>
+  <text x="9" y="30" fill="#9ece6a" font-family="'Fira Code', 'JetBrains Mono', 'Cascadia Mono', monospace" font-size="13.6" font-weight="700">❯</text>
+  <rect x="29" y="16" width="8" height="15" fill="#ff6090"></rect>
+  <text x="52.6" y="31" fill="#ff6090" font-family="'Fira Code', 'JetBrains Mono', 'Cascadia Mono', monospace" font-size="17.6" font-weight="700" letter-spacing="0.352">Canticle</text>
+</svg>

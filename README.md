@@ -25,17 +25,23 @@ them, then call a vote and let the whole room decide.
 ## Setup
 
 ```bash
-cd /mnt/data/projects/Github-Repositories/Litigation
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+./install.sh     # creates .venv, installs requirements
 ./start.sh
 ```
 
-Open <http://127.0.0.1:8766>, click **New chat**, and use **Test connection**
-beside each subscription provider. A CLI being installed is shown as
-**Installed · not verified** until that live check succeeds. Connection results
-stay only in server memory and reset when the server restarts.
+Open <http://127.0.0.1:8766>. On a fresh install you're taken to `/setup` to
+choose how Litigation authenticates inference — **your subscriptions** (each
+provider's locally signed-in CLI) or **API keys** (pay-as-you-go, stored in a
+local `0600` file and applied without a restart). The choice is flippable any
+time from the segmented control in the top navigation; new rooms follow the
+current mode while existing rooms keep the routes they were created with.
+Headless installs can use `python3 litigation_cli.py setup --mode …` and
+`--set KEY`. Details: [docs/SETUP.md](docs/SETUP.md).
+
+Click **New chat** and use **Test connection** beside each subscription
+provider. A CLI being installed is shown as **Installed · not verified** until
+that live check succeeds. Connection results stay only in server memory and
+reset when the server restarts.
 
 Open <http://127.0.0.1:8766/projects> for persistent project work. Projects use
 a separate local database and managed Git repositories, so closing the browser
@@ -48,10 +54,20 @@ SEAM connection and project knowledge status at <http://127.0.0.1:8766/seam>.
 See [docs/RULES.md](docs/RULES.md) and [docs/SEAM.md](docs/SEAM.md) for their
 append-only history, approval, deployment, and synchronization details.
 
+## Next: remote-worker cluster
+
+Remote workers are the next planned project phase; they are **not shipped**.
+The [cluster plan](docs/CLUSTER_PLAN.md) specifies a central authoritative
+coordinator, leased and fenced work over private Tailscale, exact-base Git
+worktrees, bounded evidence, and phased acceptance tests. The repository's
+[source-available licensing proposal](docs/LICENSING_PROPOSAL.md) is also
+pending an owner decision and does not grant license rights.
+
 ## Subscription accounts
 
-The first group in the new-room dialog uses the accounts already authenticated
-by each provider's local CLI. It does not ask for pay-as-you-go provider keys.
+The subscription group in the new-room dialog uses the accounts already
+authenticated by each provider's local CLI. It does not ask for pay-as-you-go
+provider keys.
 
 | Participant | Local route | Setup |
 |---|---|---|

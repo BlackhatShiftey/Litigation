@@ -141,6 +141,27 @@ def create_project_router(runtime: ProjectRuntime) -> APIRouter:
     def shared_nav_script() -> FileResponse:
         return FileResponse(Path(__file__).parent / "shared-nav.js", media_type="text/javascript")
 
+    @router.get("/branding/canticle-cosmic.css", include_in_schema=False)
+    def canticle_cosmic_styles() -> FileResponse:
+        return FileResponse(
+            Path(__file__).parent / "branding" / "canticle-cosmic.css",
+            media_type="text/css",
+        )
+
+    @router.get("/branding/litigation-canticle.css", include_in_schema=False)
+    def litigation_canticle_styles() -> FileResponse:
+        return FileResponse(
+            Path(__file__).parent / "branding" / "litigation-canticle.css",
+            media_type="text/css",
+        )
+
+    @router.get("/branding/canticle-lockup.svg", include_in_schema=False)
+    def canticle_lockup() -> FileResponse:
+        return FileResponse(
+            Path(__file__).parent / "branding" / "canticle-lockup.svg",
+            media_type="image/svg+xml",
+        )
+
     @router.get("/api/projects")
     def list_projects() -> dict[str, Any]:
         return {"items": runtime.store.list_projects()}

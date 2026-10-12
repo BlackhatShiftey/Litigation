@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -159,6 +160,17 @@ def build_parser() -> argparse.ArgumentParser:
     export = commands.add_parser("export", help="save a bounded project JSON export")
     export.add_argument("project_id")
     export.add_argument("output", type=Path)
+
+    setup = commands.add_parser(
+        "setup", help="choose subscription vs API-key usage (headless install)")
+    setup.add_argument("--mode", choices=("subscription", "api", "mixed"),
+                       help="persist the auth mode; new rooms follow it")
+    setup.add_argument("--set", action="append", default=[], metavar="ENV",
+                       help="prompt for a provider key and store it locally (repeatable)")
+    setup.add_argument("--clear", action="append", default=[], metavar="ENV",
+                       help="remove a stored provider key (repeatable)")
+    setup.add_argument("--status", action="store_true",
+                       help="print the current setup state (no key values)")
     return parser
 
 
@@ -261,6 +273,17 @@ def main(argv: list[str] | None = None) -> int:
             bundle = request("GET", f"/api/projects/{args.project_id}/export", url=url)
             args.output.write_text(json.dumps(bundle, ensure_ascii=False, indent=2), encoding="utf-8")
             result = {"ok": True, "path": str(args.output), "project_id": args.project_id}
+        elif args.command == "setup":
+            if args.set:
+                values = {}
+                for name in args.set:
+                    values[name] = getpass.getpass(f"value for {name} (input hidden): ").strip()
+                request("POST", "/api/setup/keys", {"keys": values}, url=url)
+            for name in args.clear:
+                request("DELETE", f"/api/setup/keys/{urllib.parse.quote(name)}", url=url)
+            if args.mode:
+                request("POST", "/api/setup/mode", {"mode": args.mode}, url=url)
+            result = request("GET", "/api/setup", url=url)
         else:
             raise AssertionError(args.command)
     except (RuntimeError, OSError) as exc:

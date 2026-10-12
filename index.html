@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Litigation</title>
+<title>Litigation · Canticle</title>
 <style>
 :root {
   --bg: #0d1117; --bg2: #161b22; --bg3: #1c2331;
@@ -125,18 +125,21 @@ body { font-family: -apple-system, 'Segoe UI', Roboto, sans-serif; background: v
 #empty-state .big { font-size: 44px; }
 ::-webkit-scrollbar { width: 8px; } ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
 </style>
-<link rel="stylesheet" href="/shared-nav.css">
+<link rel="stylesheet" href="/branding/canticle-cosmic.css?v=1.0.0">
+<link rel="stylesheet" href="/shared-nav.css?v=2.1.0">
+<link rel="stylesheet" href="/branding/litigation-canticle.css?v=1.0.1">
 <script src="/shared-nav.js" defer></script>
 </head>
-<body>
+<body class="cc-cosmic litigation-chat">
+<a class="cc-skip-link" href="#main-content">Skip to workspace</a>
 <header class="litigation-nav">
-  <a class="litigation-nav__brand" href="/"><span aria-hidden="true">⚖</span>Litigation</a>
+  <a class="litigation-nav__brand cc-brand" href="/" aria-label="Canticle Litigation home"><img src="/branding/canticle-lockup.svg?v=1.0.0" alt="Canticle"><span class="litigation-nav__product">Litigation</span></a>
   <nav class="litigation-nav__tabs" aria-label="Workspace sections">
     <a href="/" aria-current="page">Chat</a><a href="/projects">Projects</a><a href="/rules">Rules</a><a href="/knowledge">Knowledge</a>
   </nav>
   <div class="litigation-nav__actions"><button class="litigation-nav__new" id="new-room-btn" type="button">New chat</button></div>
 </header>
-<div class="chat-shell">
+<div class="chat-shell" id="main-content">
 <div id="sidebar">
   <div id="room-list"></div>
 </div>
@@ -186,6 +189,7 @@ const state = {
   selected: new Set(), // targeted agent ids for the next message (empty = all)
   busy: false,
   agentColor: {}, agentLabel: {},
+  setup: null,         // {auth_mode: 'subscription'|'api'|'mixed'|'unset'} from /api/setup
 };
 
 const api = {
@@ -196,6 +200,7 @@ const api = {
     return r.json();
   },
   models: () => api.json('/api/models'),
+  setup: () => api.json('/api/setup'),
   checkModel: (id) => api.json('/api/models/' + encodeURIComponent(id) + '/check', {method: 'POST'}),
   rooms: () => api.json('/api/rooms'),
   room: (id) => api.json('/api/rooms/' + id),
@@ -245,7 +250,63 @@ async function refreshRooms() {
 
 /* ---------------- New room modal ---------------- */
 
-const SUBSCRIPTION_TARGETS = ['grok', 'gemini', 'glm', 'cline', 'claude'];
+// The server's check endpoint accepts exactly these subscription routes;
+// `antigravity` is the hidden alias of `gemini`.
+const CHECKABLE_SUBSCRIPTIONS = new Set(['claude', 'grok', 'gemini', 'glm', 'cline', 'openai']);
+const SUBSCRIPTION_ORDER = ['grok', 'gemini', 'glm', 'cline', 'claude', 'openai', 'astra'];
+
+const isSubscriptionBilled = (m) => m.billing === 'subscription';
+const isLocalServer = (m) => !!m.local;
+const isCliTransport = (m) => String(m.transport || '').toLowerCase().includes('cli');
+const isApiBilled = (m) => !isSubscriptionBilled(m) && !isLocalServer(m) && !isCliTransport(m);
+
+function authMode() {
+  return (state.setup && state.setup.auth_mode) || 'unset';
+}
+
+function providerGroups() {
+  const byId = new Map(state.models.map(m => [m.id, m]));
+  const subscription = state.models
+    .filter(m => isSubscriptionBilled(m) && m.id !== 'antigravity');
+  const orderedSubs = [
+    ...SUBSCRIPTION_ORDER.map(id => byId.get(id)).filter(Boolean),
+    ...subscription.filter(m => !SUBSCRIPTION_ORDER.includes(m.id)),
+  ];
+  const rest = state.models.filter(m => !isSubscriptionBilled(m) && m.id !== 'antigravity');
+  const localsAndCli = rest.filter(m => !isApiBilled(m));
+  const apiProviders = rest.filter(isApiBilled);
+  const mode = authMode();
+  if (mode === 'subscription') {
+    return [
+      ['Subscription accounts', orderedSubs],
+      ['Local servers & other CLIs', localsAndCli],
+    ];
+  }
+  if (mode === 'api') {
+    return [
+      ['API providers', apiProviders],
+      ['Local servers & other CLIs', localsAndCli],
+    ];
+  }
+  return [
+    ['Subscription accounts', orderedSubs],
+    ['Other providers', rest],
+  ];
+}
+
+function renderModeNote(wrap) {
+  const mode = authMode();
+  if (mode !== 'subscription' && mode !== 'api') return;
+  const note = document.createElement('div');
+  note.className = 'm-hint';
+  const hidden = mode === 'subscription'
+    ? 'API-billed providers are hidden'
+    : 'subscription CLI routes are hidden';
+  note.innerHTML =
+    `Auth mode: <strong>${mode === 'subscription' ? 'Subscriptions' : 'API keys'}</strong> — ${esc(hidden)}. ` +
+    'Flip the mode in the top navigation or <a href="/setup" style="color:var(--accent)">manage it in Setup</a>.';
+  wrap.appendChild(note);
+}
 
 async function refreshModels() {
   state.models = await api.models();
@@ -280,30 +341,24 @@ function captureModelForm() {
 function renderModelRows(saved = {}) {
   const wrap = $('model-rows');
   wrap.innerHTML = '';
-  const byId = new Map(state.models.map(m => [m.id, m]));
-  const subscriptions = SUBSCRIPTION_TARGETS.map(id => byId.get(id)).filter(Boolean);
-  const rest = state.models.filter(m => !SUBSCRIPTION_TARGETS.includes(m.id) && m.id !== 'antigravity');
-  const groups = [
-    ['Subscription accounts', subscriptions],
-    ['Other providers', rest],
-  ];
-  for (const [title, models] of groups) {
+  renderModeNote(wrap);
+  for (const [title, models] of providerGroups()) {
     if (!models.length) continue;
     const heading = document.createElement('div');
     heading.className = 'model-group';
     heading.textContent = title;
     wrap.appendChild(heading);
     for (const m of models) {
-      const subscription = SUBSCRIPTION_TARGETS.includes(m.id);
+      const subscription = isSubscriptionBilled(m);
       const [status, statusClass] = modelStatus(m);
       const transport = m.transport || 'provider API';
-      const billing = subscription || m.billing === 'subscription'
+      const billing = subscription
         ? 'Subscription'
         : m.local
           ? 'Local'
-          : String(transport).toLowerCase().includes('cli')
-            ? 'CLI account'
-            : 'API billing';
+          : isApiBilled(m)
+            ? 'API billing'
+            : 'CLI account';
       const hint = m.check_message || m.blocked_reason || m.setup_hint || '';
       const prior = saved[m.id] || {};
       const row = document.createElement('div');
@@ -315,7 +370,7 @@ function renderModelRows(saved = {}) {
          <div class="m-model">${esc(m.model || 'provider default')}</div>
          <div class="m-meta"><span class="m-badge">${esc(billing)}</span><span class="m-badge">${esc(transport)}</span><span class="m-badge m-status ${statusClass}">${esc(status)}</span></div></div>
          <input type="text" value="${esc(prior.model || '')}" placeholder="model override" title="Model id override">
-         ${subscription ? `<button type="button" class="check-model" data-id="${esc(m.id)}">Test connection</button>` : '<span></span>'}
+         ${CHECKABLE_SUBSCRIPTIONS.has(m.id) ? `<button type="button" class="check-model" data-id="${esc(m.id)}">Test connection</button>` : '<span></span>'}
          ${hint ? `<div class="m-hint">${esc(hint)}</div>` : ''}`;
       wrap.appendChild(row);
     }
@@ -673,7 +728,28 @@ $('code-btn').onclick = async () => {
   renderRoom();
 };
 
+// A flip from the shared navigation re-renders an open provider picker so the
+// new mode applies without closing the dialog.
+document.addEventListener('litigation:authmode', async () => {
+  try { state.setup = await api.setup(); } catch (e) { return; }
+  if ($('modal-bg').classList.contains('show')) {
+    try {
+      await refreshModels();
+      renderModelRows(captureModelForm());
+    } catch (e) { /* leave the current rows in place */ }
+  }
+});
+
 (async function init() {
+  try {
+    state.setup = await api.setup();
+  } catch (e) {
+    // Setup endpoint unreachable: fall through and show the unfiltered picker.
+  }
+  if (state.setup && state.setup.auth_mode === 'unset') {
+    location.replace('/setup');
+    return;
+  }
   try {
     await refreshModels();
     await refreshRooms();

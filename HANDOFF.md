@@ -6,6 +6,48 @@
 `http://127.0.0.1:8766`. All five subscription connection checks and a shared
 chat turn passed on 2026-10-10. Changes are uncommitted.
 
+## 2026-10-12 — Install-time auth choice: subscriptions vs API keys
+
+Installers now choose how Litigation authenticates inference, and the choice
+stays flippable during use. A fresh install redirects `/` to the new `/setup`
+wizard (Canticle-themed): **Use my subscriptions**, **Use API keys**, or
+**Decide later** (`mixed`). Every page's shared navigation gains a segmented
+**Subscriptions · API keys · All** control injected by `shared-nav.js`; one
+click persists the mode via `POST /api/setup/mode` with no restart, and an
+open provider picker re-renders live. `litigation_cli.py setup --mode/--set/
+--clear/--status` provides the headless path, and `install.sh` is the new
+install entry point.
+
+New implementation: `setup_store.py` (versioned preference JSON at
+`~/.local/share/litigation/setup.json`, `surface: "litigation"`; key file at
+`~/.config/litigation/keys.env`, `0600`, atomic writes), `setup_routes.py`
+(`/setup` + `/api/setup*`, self-contained for SEAM absorption), and
+`setup.html`/`setup.js`/`setup.css`. Key values arrive over loopback, apply to
+the process environment immediately (overriding the repo `.env`), and are
+never echoed back — responses carry set/unset booleans only. The GLM
+subscription route collects `ZAI_API_KEY` inside the subscription card.
+
+Mode semantics: **new rooms only**. `subscription` rejects API-billed
+participants; `api` rejects subscription CLI routes; local servers and
+non-subscription CLIs stay available; existing rooms and their sends are
+never revisited. The picker classifies by registry `billing` metadata instead
+of the hardcoded `SUBSCRIPTION_TARGETS` list (which missed the codex-CLI
+`openai` route), and Test-connection buttons now follow the server's
+checkable set. See `docs/SETUP.md`.
+
+Verification: 24 new tests in `tests/test_setup_routes.py` (mode round-trip,
+corrupt-preference visibility, 0600 key writes, value-free responses, unknown
+key rejection, clear/delete, and the room enforcement matrix including a
+mid-session flip). Full suite: 124 tests, 116 pass — the 8 failures are all
+in `test_agent_execution.py` sandbox receipts and reproduce on a pristine
+HEAD worktree, so they predate this change. Selftest, node syntax checks
+(including extracted inline chat JS), `bash -n`, and `git diff --check`
+passed. A live isolated instance (port 8767, temp state) verified the /setup
+page, unset→subscription→api→mixed flows, enforcement messages, key storage
+permissions, and the CLI. The user's real preference/keys paths remain
+untouched, so the first-run wizard will appear on the next visit; the running
+8766 server must be restarted to pick up the new code.
+
 ## Current user route
 
 Run `./start.sh` and open <http://127.0.0.1:8766>. The launcher changes to the
@@ -327,3 +369,52 @@ provenance report has no failed checks; it explicitly marks proposal ancestry
 as unverified by that report (ancestry remains enforced when proposals are
 created/applied). Local relation/hash checks do not establish cryptographic
 provider identity or protect against an administrator rewriting storage.
+
+## 2026-10-10 — Next priority: remote-worker cluster
+
+The next implementation priority is the planned remote-worker cluster described
+in `docs/CLUSTER_PLAN.md`. It is not implemented or live. Begin with Phase 0:
+qualify fixed Vite production-build, Vitest, and Playwright profiles in a clean
+fixture representative of Frans without editing Frans, then test lease/fencing
+under replay, partition, revocation, cancellation, and restart conditions.
+
+The coordinator must remain the sole ledger authority and SQLite writer. Extend
+the existing claim and dispatcher path; do not create a second queue. Workers
+use revocable scoped identities, exact Git bases, per-attempt worktrees, bounded
+hashed artifacts, and stale-result fencing. Provider credentials remain local
+to the invoking worker, with verified billing and no fallback. The existing
+review-and-Apply boundary remains authoritative.
+
+`docs/LICENSING_PROPOSAL.md` recommends BUSL 1.1 with self-hosted
+personal/research/internal-business use, commercial licensing for third-party
+hosted or managed Litigation service, and Apache-2.0 conversion after four
+years per version. This is a pending policy proposal only. No license grant was
+added; the owner must choose between that restriction and permissive MIT and
+approve the exact license text after ownership and compatibility review.
+
+
+## 2026-10-10 — Canticle dashboard theme, local qualification
+
+Applied the local Canticle Cosmic UI Kit and company lockup across Chat,
+Projects, Rules, and Knowledge. The shared navigation retains all section
+links and New chat, with Tokyo Night surfaces, pink/cyan accents, Outfit
+reading text, mono utility controls, visible focus and reduced-motion support.
+Kit source hashes and fixed asset routes are recorded in docs/CANTICLE_THEME.md.
+No provider, ledger, rule authority, or task-execution behavior changed.
+
+The local server was gracefully restarted and serves the theme at port 8766.
+All four pages were rendered at 1440px desktop and 390px mobile with loaded
+local assets, correct active navigation, no JavaScript exceptions and no
+page-level horizontal overflow. Existing horizontally scrollable policy strips
+remain scrollable. New-chat provider selection, rule revision, handoff dialogs,
+and Agent room were checked; the mobile provider grid was corrected. Emulated
+reduced motion reduced control transitions to 0.001ms; visible focus was checked
+in dialogs. Three project API tests and Python compilation passed in .venv;
+git diff --check passed. The existing Starlette/httpx deprecation warning remains.
+
+Rendered previews are retained under
+/home/terrabyte/.codex/visualizations/2026/10/10/01a125ee-d442-7691-8e99-b9015fab8c4a/
+with litigation-agentroom-canticle.png and litigation-agentroom-canticle-mobile.png
+plus Knowledge and provider-picker previews. Theme changes are uncommitted and
+not pushed. Prior cluster/licensing proposal edits and .blender-toolkit remain
+preserved; no effective license was added.
