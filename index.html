@@ -593,6 +593,7 @@ async function send() {
   if (state.busy || !state.room) return;
   const text = $('input').value.trim();
   if (!text) return;
+  const knownMessageIds = new Set((state.room.messages || []).map((m) => m.id));
   state.busy = true;
   $('send').disabled = true;
   $('input').value = '';
@@ -602,6 +603,16 @@ async function send() {
 
   const streams = {};  // agentId -> {root, bubble}
   const typings = {};  // agentId -> typing el
+  const durableDispatchNotices = [];
+
+  const restoreDispatchNotices = () => {
+    for (const message of durableDispatchNotices) {
+      const note = document.createElement('div');
+      note.className = 'typing';
+      note.textContent = message;
+      $('chat').appendChild(note);
+    }
+  };
 
   const touch = (agent) => {
     if (!streams[agent]) {
@@ -616,41 +627,64 @@ async function send() {
     return streams[agent];
   };
 
-  const resp = await fetch(`/api/rooms/${state.room.id}/send`, {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({text, targets: [...state.selected],
-                          mode: state.codeMode ? 'code' : 'chat'}),
-  });
-  if (!resp.ok) {
-    const err = await resp.json().catch(() => ({}));
-    alert(err.detail || 'send failed');
-    state.busy = false; $('send').disabled = false;
-    return;
-  }
-
-  const reader = resp.body.getReader();
-  const dec = new TextDecoder();
-  let buf = '';
-  while (true) {
-    const {done, value} = await reader.read();
-    if (done) break;
-    buf += dec.decode(value, {stream: true});
-    let idx;
-    while ((idx = buf.indexOf('\n\n')) >= 0) {
-      const frame = buf.slice(0, idx).trim();
-      buf = buf.slice(idx + 2);
-      if (!frame.startsWith('data:')) continue;
-      let ev; try { ev = JSON.parse(frame.slice(5)); } catch (e) { continue; }
-      handleEvent(ev, {chat, touch, typings, streams});
+  let persisted = false;
+  try {
+    const resp = await fetch(`/api/rooms/${state.room.id}/send`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({text, targets: [...state.selected],
+                            mode: state.codeMode ? 'code' : 'chat'}),
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `send failed (HTTP ${resp.status})`);
     }
+
+    const reader = resp.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+    let turnDone = false;
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      let idx;
+      while ((idx = buf.indexOf('\n\n')) >= 0) {
+        const frame = buf.slice(0, idx).trim();
+        buf = buf.slice(idx + 2);
+        if (!frame.startsWith('data:')) continue;
+        let ev; try { ev = JSON.parse(frame.slice(5)); } catch (e) { continue; }
+        if (ev.type === 'turn_done') turnDone = true;
+        if (ev.type === 'dispatch' && ev.kind === 'context_recovery') {
+          durableDispatchNotices.push(`${labelOf(ev.agent)} · ${ev.message}`);
+        }
+        handleEvent(ev, {chat, touch, typings, streams});
+      }
+    }
+    if (!turnDone) throw new Error('response stream ended before turn completion');
+    state.room = await api.room(state.room.id);
+    persisted = (state.room.messages || []).some((m) => !knownMessageIds.has(m.id) && m.sender === 'user' && m.content === text);
+    renderRoom();
+    restoreDispatchNotices();
+  } catch (err) {
+    try {
+      state.room = await api.room(state.room.id);
+      persisted = (state.room.messages || []).some((m) => !knownMessageIds.has(m.id) && m.sender === 'user' && m.content === text);
+      renderRoom();
+      restoreDispatchNotices();
+    } catch (_) {}
+    const note = document.createElement('div');
+    note.className = 'typing';
+    note.textContent = persisted
+      ? 'The response stream was interrupted. Your message is saved; retrying automatically was avoided.'
+      : 'The send was interrupted and delivery is unknown. Check the transcript before retrying.';
+    $('chat').appendChild(note);
+    if (!persisted && !$('input').value) $('input').value = text;
+  } finally {
+    state.busy = false;
+    $('send').disabled = false;
+    $('input').focus();
   }
-  // refresh persisted transcript so ids/attrs are canonical
-  state.room = await api.room(state.room.id);
-  renderRoom();
-  state.busy = false;
-  $('send').disabled = false;
-  $('input').focus();
 }
 
 function handleEvent(ev, ctx) {
@@ -672,6 +706,14 @@ function handleEvent(ev, ctx) {
     }
     case 'done': {
       if (typings[ev.agent]) { typings[ev.agent].remove(); delete typings[ev.agent]; }
+      break;
+    }
+    case 'dispatch': {
+      const p = document.createElement('div');
+      p.className = 'typing';
+      p.textContent = `${labelOf(ev.agent)} · ${ev.message || 'dispatch status updated'}`;
+      chat.appendChild(p);
+      chat.scrollTop = chat.scrollHeight;
       break;
     }
     case 'error': {

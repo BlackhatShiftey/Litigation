@@ -16,6 +16,7 @@ from pydantic import BaseModel
 
 import providers
 import ring
+import model_dispatch
 from db import Database
 from project_routes import create_project_router
 from project_runtime import runtime_from_environment
@@ -73,6 +74,11 @@ MODEL_CHECKS: dict[str, dict[str, str]] = {}
 CHECKABLE_SUBSCRIPTIONS = {
     "claude", "grok", "gemini", "antigravity", "glm", "cline", "openai", "astra",
 }
+
+
+@app.get("/api/dispatch")
+async def dispatch_status() -> dict[str, Any]:
+    return {"lanes": model_dispatch.status()}
 
 RING_SPEC = (
     "When agents address EACH OTHER in this chat they use the 'ring': a compact "
@@ -481,6 +487,49 @@ async def send(room_id: str, body: SendBody) -> StreamingResponse:
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+async def _completion_events(
+    agent: dict[str, Any], messages: list[dict[str, str]], **kwargs: Any,
+) -> AsyncIterator[tuple[str, Any]]:
+    """Merge provider deltas and dispatch notices without delaying queue status."""
+    events: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(maxsize=64)
+
+    async def notice(payload: dict[str, Any]) -> None:
+        await events.put(("notice", payload))
+
+    async def produce() -> None:
+        iterator = providers.stream_completion(
+            agent, messages, notice=notice, **kwargs,
+        )
+        try:
+            async for delta in iterator:
+                await events.put(("delta", delta))
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await events.put(("error", exc))
+        else:
+            await events.put(("done", None))
+        finally:
+            await iterator.aclose()
+
+    task = asyncio.create_task(produce())
+    try:
+        while True:
+            kind, payload = await events.get()
+            if kind == "done":
+                return
+            if kind == "error":
+                raise payload
+            yield kind, payload
+    finally:
+        if not task.done():
+            task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+
+
 async def _run_turn(room: dict[str, Any], targets: list[dict[str, Any]],
                     history: list[dict[str, Any]], coding: bool = False,
                     workspace: str = "") -> AsyncIterator[str]:
@@ -500,12 +549,16 @@ async def _run_turn(room: dict[str, Any], targets: list[dict[str, Any]],
                 "supports_coding", bool(agent.get("cli_coding_flags")))
             before = await _head_ref(workspace) if coding and is_harness else ""
             chunks: list[str] = []
-            async for delta in providers.stream_completion(
+            async for event_kind, payload in _completion_events(
                     agent, _build_messages(p["id"], history, room["participants"],
                                            coding=coding, workspace=workspace,
                                            is_harness=is_harness),
                     coding=coding and is_harness,
                     cwd=workspace if coding and is_harness else None):
+                if event_kind == "notice":
+                    yield {"type": "dispatch", "agent": p["id"], **payload}
+                    continue
+                delta = str(payload)
                 chunks.append(delta)
                 yield {"type": "delta", "agent": p["id"], "text": delta}
             full = "".join(chunks).strip()
@@ -554,6 +607,10 @@ async def _run_turn(room: dict[str, Any], targets: list[dict[str, Any]],
             yield _sse(ev)
     finally:
         drain_task.cancel()
+        try:
+            await drain_task
+        except asyncio.CancelledError:
+            pass
 
     # -- cross-talk: one bounded ring round between the answering agents -----
     if room.get("crosstalk") and len(replies) > 1:

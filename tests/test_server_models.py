@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -42,6 +43,26 @@ def _entry(model_id: str, *, available: bool = True) -> dict[str, object]:
     }
 
 
+class CompletionEventCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_close_under_backpressure_awaits_provider_cleanup(self) -> None:
+        stopped = asyncio.Event()
+
+        async def fake_stream():
+            try:
+                for _ in range(1_000):
+                    yield "delta"
+            finally:
+                stopped.set()
+
+        with mock.patch("server.providers.stream_completion", return_value=fake_stream()):
+            events = server._completion_events({}, [])
+            self.assertEqual(await anext(events), ("delta", "delta"))
+            for _ in range(3):
+                await asyncio.sleep(0)
+            await events.aclose()
+        self.assertTrue(stopped.is_set())
+
+
 class ModelApiTests(unittest.TestCase):
     def setUp(self) -> None:
         server.MODEL_CHECKS.clear()
@@ -56,6 +77,18 @@ class ModelApiTests(unittest.TestCase):
         self.assertEqual(unknown.status_code, 404)
         self.assertEqual(api_provider.status_code, 400)
         complete.assert_not_called()
+
+    def test_dispatch_status_exposes_only_safe_lane_fields(self) -> None:
+        response = self.client.get("/api/dispatch")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("lanes", response.json())
+        allowed = {
+            "provider", "model", "capacity", "active", "pending", "max_pending",
+            "queue_wait_seconds", "overall_timeout_seconds", "counters",
+        }
+        for row in response.json()["lanes"]:
+            self.assertEqual(set(row), allowed)
+            self.assertNotIn("prompt", str(row).lower())
 
     def test_exact_reply_marks_check_verified_and_get_merges_status(self) -> None:
         claude = _entry("claude")

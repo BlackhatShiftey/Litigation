@@ -1,5 +1,106 @@
 # Handoff — Litigation subscription setup
 
+## 2026-10-12 — Per-model dispatcher and large-request recovery
+
+**Implementation state:** functionally qualified and running from the isolated checkout
+`/mnt/data/projects/Github-Repositories/Litigation-loadbalancer` on branch
+`codex/model-loadbalancer`. Publication target is
+`origin/codex/model-loadbalancer`; main integration is separate. Only the
+owned development process on `http://127.0.0.1:8788` was restarted, including
+the verified Cline/Antigravity repairs. Application data is isolated under
+`/home/terrabyte/.local/share/litigation/dev-model-loadbalancer`. No existing
+instance was changed or restarted by this task; the user-identified port 8787
+was left untouched. Live checks used subscription routes only, with no paid
+API fallback. The automated test suite makes no live provider requests.
+
+Local service verification: `/`, `/api/models`, `/api/rooms`, and
+`/api/dispatch` returned HTTP 200 on 8788; the registry exposed subscription
+routes only, with zero active or pending requests. The terminal CLI against
+8788 returned the isolated empty room list. Existing ports 8766 and 8767
+still returned HTTP 200 with their 82 and 3 rooms, respectively. No listener
+was visible on 8787 in this environment. Concurrent Grok/Cline/GLM timeout
+edits in the original checkout were observed and preserved as unrelated work.
+
+Live acceptance passed normal chat on all six
+subscription providers, a 60 KiB Grok request, and two queued Claude requests.
+The first 60 KiB Cline and Gemini-through-Antigravity runs exposed installed
+CLI wire-contract mismatches: Cline JSON mode required a short positional
+primer alongside file-backed stdin, while Antigravity required an `event:user`
+record with a nested message and returned its successful response inside a
+nested `event:result` record. This checkout now implements those observed
+contracts. After the repair, application-level 60 KiB ASCII and Unicode
+requests passed through Grok, Cline, and Gemini. Every submitted message was
+persisted exactly, both first/last fixture facts were present in each answer,
+and every SSE stream emitted completion and `turn_done`. At the final check,
+8788 had zero active/pending requests and zero failed requests since restart;
+8766/8767 still responded with their original room counts. All failed initial
+probes and private prompt records were retained. The source hashes stayed
+unchanged throughout post-repair acceptance.
+
+All completion surfaces now enter `model_dispatch.py` under a canonical
+provider + exact selected-model key. Each event loop receives bounded FIFO
+lanes (default one active, eight pending, 45-second queue wait, 720-second
+wall deadline), validated global/per-model configuration, deterministic stream
+and process cleanup, bounded lane cardinality, and safe counters through
+`GET /api/dispatch`. This is local worker-slot scheduling around one provider
+route, not remote load-balancer replication.
+
+`providers.py` keeps the exact model, provider transport, and billing route.
+It retries a safe pre-output transient failure once, never replays native
+coding or partial output, rejects incomplete HTTP/CLI terminal streams, and
+classifies bounded private HTTP diagnostics without exposing bodies. Large
+argument prompts use full-content alternatives: retained private `0600` Grok
+prompt files, retained private `0600` Cline prompt files opened as stdin with a
+constant positional primer, and Antigravity `event:user` stream-JSON stdin with
+nested terminal-result parsing. Existing
+stdin-based Claude/GLM/OpenAI routes remain intact. `E2BIG` may select the same
+provider's verified alternate transport once.
+
+When a provider itself rejects request size, ordinary chat first omits only
+oldest conversational history in a request copy, keeping all system
+instructions and the latest user content. If that protected core still cannot
+fit, the same admitted model may summarize at most eight actual-wire-size
+fitted UTF-8 chunks and synthesize a final answer. Every original character is
+included across those chunk calls. The UI and CLI receive explicit `dispatch`
+status; summary/history notices remain visible. Litigation controller
+transcripts and coding requests are never shortened. The original database
+transcript is never changed by recovery.
+
+Browser and CLI sends now treat a clean SSE EOF without `turn_done` as an
+interrupted/unknown delivery state. They do not auto-repost. The browser always
+unlocks its composer, reloads persisted room state where possible, and restores
+the draft only when the user has not typed newer input. Unknown delivery stays
+explicit so the user can check the transcript before retrying.
+CLI vote/check calls use the long provider deadline rather than the old
+30-second generic request timeout.
+
+Verification from this checkout:
+
+- Pre-change baseline: 145 tests passed.
+- Final full suite: 173 tests passed in 15.211 seconds.
+- Focused dispatcher/provider/server/CLI suite: 71 tests passed.
+- Isolated `run_selftest.py`: ring, DB, providers, and coding-mode checks passed;
+  all Litigation DB/rules/setup/projects/SEAM/provider-prompt paths were under
+  `/tmp/litigation-dispatch-selftest-kCijKt`.
+- Extracted inline `index.html` JavaScript passed `node --check -`.
+- Changed Python files passed `py_compile`; `git diff --check` passed.
+- Live normal turns: Claude, OpenAI, Grok, Gemini, GLM, and Cline passed.
+- Live 61,440-byte ASCII and UTF-8 turns: Grok, Cline, and Gemini passed.
+- Live same-model queue: two concurrent Claude requests completed with at
+  most one active worker and an observed pending request.
+
+The 60 KiB ASCII and multibyte paths are fake-CLI qualified for exact
+stdin/file/NDJSON delivery. Cline tests enforce the positional primer,
+file-backed stdin, retained `0600` full transformed prompt, and descriptor
+cleanup; Antigravity tests enforce the installed CLI's nested event envelope
+and terminal result. Timeout/retry exhaustion, alias/model isolation,
+FIFO capacity, overload, queue timeout, queued cancellation, generator close,
+heartbeat-resistant deadline, HTTP 400/413 size classification, incomplete
+streams, history-first recovery, chunk byte fitting, original-byte coverage,
+and controller exclusion have automated coverage. Installed-CLI probes supplied
+the Cline and Antigravity wire contracts; the automated suite itself makes no
+live provider requests. See `docs/MODEL_DISPATCH.md`.
+
 **Date:** 2026-10-10
 **Project root:** `/mnt/data/projects/Github-Repositories/Litigation`
 **State:** Implemented in the working tree and running locally at

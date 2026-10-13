@@ -13,14 +13,17 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
 import os
 import signal
 import shutil
 import tempfile
-from typing import Any, AsyncIterator
+from pathlib import Path
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 import httpx
+import model_dispatch
 
 BASE_REGISTRY: list[dict[str, Any]] = [
     # -- the big four ------------------------------------------------------
@@ -93,6 +96,7 @@ BASE_REGISTRY: list[dict[str, Any]] = [
             "--no-subagents", "--disable-web-search", "--max-turns", "1",
         ],
         "cli_prompt_flag": "-p", "cli_model_flag": "--model", "cli_timeout": 300,
+        "cli_large_transport": "prompt-file", "cli_prompt_file_flag": "--prompt-file",
         "cli_strip_env": ["XAI_*", "GROK_API_KEY", "GROK_BASE_URL", "OPENAI_*"],
         "transport": "grok-cli", "billing": "subscription",
         "supports_coding": False,
@@ -120,6 +124,7 @@ BASE_REGISTRY: list[dict[str, Any]] = [
         "cli_prompt_flag": "-p", "cli_model_flag": "--model",
         "cli_output": "antigravity-json",
         "cli_prompt_transform": "prefix-user",
+        "cli_large_transport": "antigravity-stream-json",
         "cli_timeout": 240, "transport": "antigravity-cli",
         "billing": "subscription", "supports_coding": False,
         "limitations": "Antigravity plan+sandbox mode cannot disable user plugins.",
@@ -136,6 +141,7 @@ BASE_REGISTRY: list[dict[str, Any]] = [
         "cli_prompt_flag": "-p", "cli_model_flag": "--model",
         "cli_output": "antigravity-json",
         "cli_prompt_transform": "prefix-user",
+        "cli_large_transport": "antigravity-stream-json",
         "cli_timeout": 240, "transport": "antigravity-cli",
         "billing": "subscription", "supports_coding": False,
         "limitations": "Antigravity plan+sandbox mode cannot disable user plugins.",
@@ -157,6 +163,10 @@ BASE_REGISTRY: list[dict[str, Any]] = [
         "cli_model_flag": "--model", "cli_output": "cline-ndjson",
         "allowed_model_prefix": "cline-pass/",
         "cli_prompt_transform": "cline-safe", "cli_runtime_data": True,
+        "cli_large_transport": "stdin-file",
+        "cli_large_primer": (
+            "Respond to the complete piped input. Follow its instructions and do not call native tools."
+        ),
         "cli_strip_env": ["CLINE_*"],
         "cli_env": {
             "CLINE_GLOBAL_SETTINGS_PATH": os.path.join(
@@ -301,8 +311,11 @@ BASE_REGISTRY: list[dict[str, Any]] = [
 _TIMEOUT = httpx.Timeout(connect=15.0, read=180.0, write=30.0, pool=15.0)
 
 
-class ProviderError(RuntimeError):
-    pass
+class ProviderError(model_dispatch.DispatchError):
+    """Sanitized provider failure with a stable retry/recovery category."""
+
+    def __init__(self, message: str, *, code: str = "transient", retryable: bool = False):
+        super().__init__(message, code=code, retryable=retryable)
 
 
 SUBSCRIPTION_PROVIDER_IDS = frozenset(
@@ -527,6 +540,37 @@ def _parse_cli_output(agent: dict[str, Any], raw: bytes) -> str:
         if not isinstance(response, str) or not response.strip():
             raise ProviderError("Antigravity returned no response text")
         return response.strip()
+    if output_format == "antigravity-stream-json":
+        result = ""
+        completed = False
+        for line in text.splitlines():
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError as exc:
+                raise ProviderError("Antigravity returned invalid stream JSON", code="empty_response") from exc
+            if not isinstance(payload, dict):
+                raise ProviderError("Antigravity returned malformed stream JSON", code="empty_response")
+            event = str(payload.get("event", "")).lower()
+            if event in {"init", "step_update"}:
+                continue
+            if event == "error":
+                raise ProviderError("Antigravity reported an execution error", code="transient", retryable=True)
+            if event != "result" or not isinstance(payload.get("result"), dict):
+                raise ProviderError("Antigravity returned malformed stream JSON", code="empty_response")
+            terminal = payload["result"]
+            status = str(terminal.get("status", "")).lower()
+            if status != "success":
+                raise ProviderError("Antigravity did not complete the request", code="transient", retryable=True)
+            response = terminal.get("response")
+            if not isinstance(response, str) or not response.strip():
+                raise ProviderError("Antigravity returned no response text", code="empty_response")
+            completed = True
+            result = response.strip()
+        if not completed:
+            raise ProviderError("Antigravity did not return a successful terminal result", code="empty_response")
+        if not result:
+            raise ProviderError("Antigravity returned no response text", code="empty_response")
+        return result
     if output_format == "cline-ndjson":
         chunks: list[str] = []
         done_reason = ""
@@ -600,6 +644,26 @@ def _cli_failure_category(stdout: bytes, stderr: bytes) -> str:
     return "request failed"
 
 
+def _cli_failure_code(stdout: bytes, stderr: bytes) -> tuple[str, bool]:
+    diagnostic = (stderr + b"\n" + stdout).decode("utf-8", "replace").lower()
+    if any(term in diagnostic for term in (
+        "login required", "not logged in", "unauthorized", "authentication",
+        "oauth", "sign in", "signin", "unsupported_client", "unsupported client",
+    )):
+        return "auth", False
+    if any(term in diagnostic for term in ("model not found", "unknown model", "invalid model")):
+        return "unknown_model", False
+    if any(term in diagnostic for term in ("policy", "content blocked", "safety")):
+        return "policy", False
+    if any(term in diagnostic for term in ("too large", "payload", "request entity", "context length")):
+        return "payload_too_large", False
+    if any(term in diagnostic for term in ("quota", "rate limit", "usage limit", "resource exhausted")):
+        return "rate_limit", True
+    if any(term in diagnostic for term in ("timeout", "timed out", "temporarily unavailable", "try again")):
+        return "timeout", True
+    return "transient", True
+
+
 def _cli_success_warning(stderr: bytes) -> str:
     """Detect CLIs that exit zero after emitting only a partial result."""
     diagnostic = stderr.decode("utf-8", "replace").lower()
@@ -635,8 +699,39 @@ def _transform_cli_prompt(agent: dict[str, Any], prompt: str) -> str:
     return prompt
 
 
+def _retained_prompt_file(agent: dict[str, Any], prompt: str) -> str:
+    root = Path(os.environ.get(
+        "LITIGATION_PROVIDER_STATE_ROOT",
+        os.path.expanduser("~/.local/share/litigation/provider-prompts"),
+    )) / str(agent.get("canonical_id") or agent.get("id") or "provider")
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd, path = tempfile.mkstemp(prefix="prompt-", suffix=".txt", dir=root)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write(prompt)
+    return path
+
+
+def _antigravity_stream_input(prompt: str) -> bytes:
+    """Encode the installed agy CLI's one-record stream-json user input."""
+    return (json.dumps(
+        {"event": "user", "message": {"role": "user", "content": prompt}},
+        ensure_ascii=False, separators=(",", ":"),
+    ) + "\n").encode("utf-8")
+
+
+def _argv_threshold() -> int:
+    try:
+        return max(4096, min(1024 * 1024, int(
+            os.environ.get("LITIGATION_CLI_ARGV_THRESHOLD_BYTES", "49152")
+        )))
+    except (ValueError, OverflowError):
+        return 49152
+
+
 async def _stream_cli(agent: dict[str, Any], prompt: str, cwd: str | None = None,
-                      coding: bool = False, model: str = "") -> AsyncIterator[str]:
+                      coding: bool = False, model: str = "",
+                      _force_large: bool = False) -> AsyncIterator[str]:
     """Run a subscription CLI headless and yield its reply as one delta.
 
     Entry fields: `cli` (command prefix; the binary is resolved to an
@@ -656,6 +751,7 @@ async def _stream_cli(agent: dict[str, Any], prompt: str, cwd: str | None = None
     if not agent.get("runtime_enabled", True):
         reason = agent.get("blocked_reason", "This provider route is disabled.")
         raise ProviderError(f"{agent.get('label', 'Provider')} is unavailable: {reason}")
+    original_prompt = prompt
     cmd = list(agent["cli"])
     if coding:
         cmd += [str(f) for f in agent.get("cli_coding_flags", [])]
@@ -672,9 +768,37 @@ async def _stream_cli(agent: dict[str, Any], prompt: str, cwd: str | None = None
         )
     if agent.get("cli_model_flag") and selected_model:
         cmd += [agent["cli_model_flag"], selected_model]
-    stdin_mode = bool(agent.get("cli_stdin"))
     prompt = _transform_cli_prompt(agent, prompt)
-    if not stdin_mode:
+    threshold = _argv_threshold()
+    large_transport = str(agent.get("cli_large_transport") or "")
+    use_large = bool(large_transport) and (_force_large or len(prompt.encode("utf-8")) >= threshold)
+    stdin_mode = bool(agent.get("cli_stdin"))
+    stdin_payload = prompt.encode() if stdin_mode else None
+    stdin_path = ""
+    stdin_file: Any | None = None
+    parse_agent = agent
+    if use_large and large_transport == "prompt-file":
+        retained_path = _retained_prompt_file(agent, prompt)
+        cmd += [str(agent.get("cli_prompt_file_flag") or "--prompt-file"), retained_path]
+        stdin_mode = False
+        stdin_payload = None
+    elif use_large and large_transport == "stdin-file":
+        stdin_path = _retained_prompt_file(agent, prompt)
+        cmd.append(str(agent.get("cli_large_primer") or "Respond to the complete piped input."))
+        stdin_mode = True
+        stdin_payload = None
+    elif use_large and large_transport == "antigravity-stream-json":
+        if "--output-format" in cmd:
+            marker = cmd.index("--output-format")
+            if marker + 1 < len(cmd):
+                cmd[marker + 1] = "stream-json"
+        else:
+            cmd += ["--output-format", "stream-json"]
+        cmd += ["--input-format", "stream-json"]
+        stdin_mode = True
+        stdin_payload = _antigravity_stream_input(prompt)
+        parse_agent = {**agent, "cli_output": "antigravity-stream-json"}
+    elif not stdin_mode:
         prompt_flag = agent.get("cli_prompt_flag")
         if prompt_flag:
             cmd += [str(prompt_flag), prompt]
@@ -705,26 +829,48 @@ async def _stream_cli(agent: dict[str, Any], prompt: str, cwd: str | None = None
             runtime_dir = tempfile.mkdtemp(prefix="run-", dir=state_root)
             child_env["CLINE_DATA_DIR"] = os.path.join(runtime_dir, "data")
         process_cwd = cwd or runtime_dir or "/tmp"
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdin=asyncio.subprocess.PIPE if stdin_mode else asyncio.subprocess.DEVNULL,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=child_env, cwd=process_cwd, start_new_session=True)
+        if stdin_path:
+            stdin_file = open(stdin_path, "rb")
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=(stdin_file if stdin_file is not None else
+                       asyncio.subprocess.PIPE if stdin_mode else asyncio.subprocess.DEVNULL),
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=child_env, cwd=process_cwd, start_new_session=True)
+        except OSError as exc:
+            if exc.errno == errno.E2BIG and large_transport and not use_large:
+                fallback = _stream_cli(
+                    agent, original_prompt, cwd=cwd, coding=coding, model=model, _force_large=True,
+                )
+                try:
+                    async for delta in fallback:
+                        yield delta
+                finally:
+                    await fallback.aclose()
+                return
+            if exc.errno == errno.E2BIG:
+                raise ProviderError("provider command payload is too large", code="payload_too_large") from exc
+            raise
         try:
             out_b, err_b = await asyncio.wait_for(
-                proc.communicate(prompt.encode() if stdin_mode else None),
+                proc.communicate(stdin_payload if stdin_mode and stdin_file is None else None),
                 timeout=timeout_s)
         except asyncio.TimeoutError:
             await _stop_process_group(proc)
             raise ProviderError(
-                f"{agent.get('label', agent.get('id', '?'))}: cli timed out after {timeout_s:.0f}s")
+                f"{agent.get('label', agent.get('id', '?'))}: cli timed out after {timeout_s:.0f}s",
+                code="timeout", retryable=True)
         except asyncio.CancelledError:
             await _stop_process_group(proc)
             raise
         warning = _cli_success_warning(err_b) if proc.returncode == 0 else ""
         if warning:
-            raise ProviderError(f"{agent.get('label', '?')} CLI {warning}")
+            raise ProviderError(
+                f"{agent.get('label', '?')} CLI {warning}",
+                code="timeout", retryable=True,
+            )
         if outfile:
             try:
                 with open(outfile, encoding="utf-8", errors="replace") as f:
@@ -733,7 +879,7 @@ async def _stream_cli(agent: dict[str, Any], prompt: str, cwd: str | None = None
                 text = ""
         else:
             try:
-                text = _parse_cli_output(agent, out_b)
+                text = _parse_cli_output(parse_agent, out_b)
             except ProviderError:
                 if proc.returncode == 0:
                     raise
@@ -742,13 +888,19 @@ async def _stream_cli(agent: dict[str, Any], prompt: str, cwd: str | None = None
             hint = agent.get("setup_hint", "")
             suffix = f" {hint}" if hint else ""
             category = _cli_failure_category(out_b, err_b)
+            code, retryable = _cli_failure_code(out_b, err_b)
             raise ProviderError(
                 f"{agent.get('label', '?')} CLI {category} "
-                f"(exit {proc.returncode}).{suffix}")
+                f"(exit {proc.returncode}).{suffix}", code=code, retryable=retryable)
         if not text.strip():
-            raise ProviderError(f"{agent.get('label', '?')} CLI returned no response text")
+            raise ProviderError(
+                f"{agent.get('label', '?')} CLI returned no response text",
+                code="empty_response", retryable=True,
+            )
         yield text.strip()
     finally:
+        if stdin_file is not None:
+            stdin_file.close()
         if outfile:
             try:
                 os.remove(outfile)
@@ -758,44 +910,335 @@ async def _stream_cli(agent: dict[str, Any], prompt: str, cwd: str | None = None
 
 # -- streaming ------------------------------------------------------------
 
+NoticeCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
-async def stream_completion(agent: dict[str, Any], messages: list[dict[str, str]],
-                            model: str | None = None, max_tokens: int = 2048,
-                            temperature: float = 0.7, cwd: str | None = None,
-                            coding: bool = False) -> AsyncIterator[str]:
-    """Stream text deltas from one agent over its native API.
 
-    cwd/coding only affect `api: "cli"` providers: coding mode runs the
-    harness inside the given workspace directory with auto-approve flags.
-    HTTP providers ignore them (they have no file tools on this wire).
-    """
-    agent, model = _resolve_dispatch_agent(agent, model)
+async def _notify(callback: NoticeCallback | None, kind: str, message: str) -> None:
+    if callback is not None:
+        await callback({"kind": kind, "message": message})
+
+
+def _dispatch_key(agent: dict[str, Any], model: str) -> tuple[str, str]:
+    canonical = str(
+        agent.get("canonical_id")
+        or SUBSCRIPTION_PROVIDER_ALIASES.get(str(agent.get("id") or ""), str(agent.get("id") or ""))
+    )
+    return canonical, model
+
+
+def _controller_transcript(messages: list[dict[str, str]]) -> bool:
+    return any("You are a coding agent controlled by Litigation." in m.get("content", "")
+               for m in messages)
+
+
+def _serialized_request_size(agent: dict[str, Any], messages: list[dict[str, str]],
+                             model: str, max_tokens: int, temperature: float) -> int:
+    if agent.get("api") == "cli":
+        transformed = _transform_cli_prompt(agent, _serialize_prompt(messages))
+        if (agent.get("cli_large_transport") == "antigravity-stream-json"
+                and len(transformed.encode("utf-8")) >= _argv_threshold()):
+            return len(_antigravity_stream_input(transformed))
+        size = len(transformed.encode("utf-8"))
+        if (agent.get("cli_large_transport") == "stdin-file"
+                and size >= _argv_threshold()):
+            size += len(str(agent.get("cli_large_primer") or "").encode("utf-8")) + 2
+        return size
+    api = agent.get("api", "openai")
+    if api == "anthropic":
+        body: dict[str, Any] = {
+            "model": model, "max_tokens": max_tokens, "temperature": temperature,
+            "messages": [m for m in messages if m.get("role") != "system"], "stream": True,
+        }
+        system = "\n\n".join(m["content"] for m in messages if m.get("role") == "system")
+        if system:
+            body["system"] = system
+    elif api == "responses":
+        body = {"model": model, "input": messages, "max_output_tokens": max_tokens,
+                "temperature": temperature, "stream": True}
+    else:
+        body = {"model": model, "messages": messages, "max_tokens": max_tokens,
+                "temperature": temperature, "stream": True}
+    return len(json.dumps(body, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _drop_oldest_history(agent: dict[str, Any], messages: list[dict[str, str]],
+                         model: str, max_tokens: int, temperature: float,
+                         hard_cap: int) -> list[dict[str, str]] | None:
+    latest_user = max((i for i, m in enumerate(messages) if m.get("role") == "user"), default=-1)
+    removable = [i for i, m in enumerate(messages)
+                 if m.get("role") != "system" and i != latest_user]
+    if not removable:
+        return None
+    remove: set[int] = set()
+    candidate = list(messages)
+    for index in removable:
+        remove.add(index)
+        candidate = [dict(m) for i, m in enumerate(messages) if i not in remove]
+        candidate.insert(0, {
+            "role": "system",
+            "content": "Litigation dispatch notice: older conversational history was omitted after the provider rejected the request size. All original system instructions and the latest user message are preserved.",
+        })
+        if _serialized_request_size(agent, candidate, model, max_tokens, temperature) <= hard_cap:
+            return candidate
+    return candidate
+
+
+async def _collect_raw(
+    agent: dict[str, Any], messages: list[dict[str, str]], model: str,
+    max_tokens: int, temperature: float, cwd: str | None, coding: bool,
+) -> str:
+    chunks: list[str] = []
+    iterator = _stream_completion_raw(
+        agent, messages, model, max_tokens, temperature, cwd=cwd, coding=coding,
+    )
+    try:
+        async for delta in iterator:
+            chunks.append(delta)
+    finally:
+        await iterator.aclose()
+    result = "".join(chunks).strip()
+    if not result:
+        raise ProviderError("provider returned no response text", code="empty_response", retryable=True)
+    return result
+
+
+async def _summarize_large_latest(
+    agent: dict[str, Any], messages: list[dict[str, str]], model: str,
+    max_tokens: int, temperature: float, cwd: str | None, hard_cap: int,
+) -> list[dict[str, str]]:
+    systems = [dict(m) for m in messages if m.get("role") == "system"]
+    latest = next((dict(m) for m in reversed(messages) if m.get("role") == "user"), None)
+    if latest is None:
+        raise ProviderError("provider payload is too large and has no recoverable user message",
+                            code="payload_too_large")
+    def chunk_messages(part: str, index: int = 8, total: int = 8) -> list[dict[str, str]]:
+        return systems + [{
+            "role": "user",
+            "content": (
+                f"Summarize request chunk {index}/{total} faithfully for a later synthesis. "
+                "Preserve requirements, literal values, and boundaries; do not answer it yet.\n\n" + part
+            ),
+        }]
+
+    if _serialized_request_size(
+            agent, chunk_messages(""), model, min(max_tokens, 512), 0.1) > hard_cap:
+        raise ProviderError("protected system instructions leave no safe payload recovery space",
+                            code="payload_too_large")
+    text = latest["content"]
+    parts: list[str] = []
+    start = 0
+    while start < len(text) and len(parts) < 8:
+        low, high, best = start + 1, len(text), start
+        while low <= high:
+            middle = (low + high) // 2
+            candidate = text[start:middle]
+            size = _serialized_request_size(
+                agent, chunk_messages(candidate), model, min(max_tokens, 512), 0.1,
+            )
+            if size <= hard_cap:
+                best = middle
+                low = middle + 1
+            else:
+                high = middle - 1
+        if best == start:
+            raise ProviderError("provider payload cap cannot fit one UTF-8 request character",
+                                code="payload_too_large")
+        parts.append(text[start:best])
+        start = best
+    if not parts or start != len(text):
+        raise ProviderError("latest user message exceeds the bounded eight-part recovery limit",
+                            code="payload_too_large")
+    summaries: list[str] = []
+    for index, part in enumerate(parts, 1):
+        request = chunk_messages(part, index, len(parts))
+        if _serialized_request_size(
+                agent, request, model, min(max_tokens, 512), 0.1) > hard_cap:
+            raise ProviderError("serialized recovery chunk exceeds the provider payload cap",
+                                code="payload_too_large")
+        summaries.append(await _collect_raw(
+            agent, request, model, min(max_tokens, 512), 0.1, cwd, False,
+        ))
+    synthesis = systems + [{
+        "role": "user",
+        "content": (
+            "Litigation dispatch notice: the original request exceeded the provider payload cap. "
+            "Produce the final answer from these same-model summaries and explicitly state that "
+            "the answer uses summaries of the original request.\n\n"
+            + "\n\n".join(f"[summary {i}/{len(summaries)}]\n{s}" for i, s in enumerate(summaries, 1))
+        ),
+    }]
+    if _serialized_request_size(agent, synthesis, model, max_tokens, temperature) > hard_cap:
+        raise ProviderError("same-model summaries do not fit the provider payload cap",
+                            code="payload_too_large")
+    return synthesis
+
+
+def _normalize_failure(exc: BaseException) -> ProviderError:
+    if isinstance(exc, ProviderError):
+        return exc
+    if isinstance(exc, model_dispatch.DispatchError):
+        return ProviderError(str(exc), code=exc.code, retryable=exc.retryable)
+    if isinstance(exc, (httpx.TimeoutException, asyncio.TimeoutError)):
+        return ProviderError("provider request timed out", code="timeout", retryable=True)
+    if isinstance(exc, httpx.TransportError):
+        return ProviderError("provider transport failed", code="transient", retryable=True)
+    return ProviderError("provider request failed", code="transient", retryable=True)
+
+
+async def _stream_completion_raw(agent: dict[str, Any], messages: list[dict[str, str]],
+                                 model: str, max_tokens: int = 2048,
+                                 temperature: float = 0.7, cwd: str | None = None,
+                                 coding: bool = False) -> AsyncIterator[str]:
     api = agent.get("api", "openai")
     if api == "cli":
-        async for delta in _stream_cli(agent, _serialize_prompt(messages),
-                                       cwd=cwd, coding=coding, model=model):
-            yield delta
+        iterator = _stream_cli(agent, _serialize_prompt(messages),
+                               cwd=cwd, coding=coding, model=model)
+        try:
+            async for delta in iterator:
+                yield delta
+        finally:
+            await iterator.aclose()
         return
     key = _resolve_key(agent)
     base = agent["base_url"].rstrip("/")
     if api == "anthropic":
-        async for delta in _stream_anthropic(base, key, model, messages, max_tokens, temperature):
-            yield delta
+        iterator = _stream_anthropic(base, key, model, messages, max_tokens, temperature)
     elif api == "responses":
-        async for delta in _stream_responses(base, key, model, messages, max_tokens, temperature):
-            yield delta
+        iterator = _stream_responses(base, key, model, messages, max_tokens, temperature)
     else:
-        async for delta in _stream_openai(base, key, model, messages, max_tokens, temperature):
+        iterator = _stream_openai(base, key, model, messages, max_tokens, temperature)
+    try:
+        async for delta in iterator:
             yield delta
+    finally:
+        await iterator.aclose()
+
+
+async def stream_completion(agent: dict[str, Any], messages: list[dict[str, str]],
+                            model: str | None = None, max_tokens: int = 2048,
+                            temperature: float = 0.7, cwd: str | None = None,
+                            coding: bool = False,
+                            notice: NoticeCallback | None = None) -> AsyncIterator[str]:
+    """Stream a completion through the exact provider/model dispatch lane."""
+    agent, model = _resolve_dispatch_agent(agent, model)
+    key = _dispatch_key(agent, model)
+    original_messages = [dict(m) for m in messages]
+    try:
+        hard_cap = max(8192, min(16 * 1024 * 1024, int(
+            os.environ.get("LITIGATION_PROVIDER_PAYLOAD_BYTES", "262144")
+        )))
+    except (ValueError, OverflowError):
+        hard_cap = 262144
+
+    async def queued_notice() -> None:
+        await _notify(notice, "queued", "Waiting for capacity on the selected model.")
+
+    async def operation(emit: Callable[[str], Awaitable[None]]) -> None:
+        attempt_messages = original_messages
+        attempts = 0
+        recovered_history = False
+        argv_threshold = _argv_threshold()
+        if (agent.get("api") == "cli" and agent.get("cli_large_transport")
+                and _serialized_request_size(agent, attempt_messages, model, max_tokens, temperature)
+                >= argv_threshold):
+            model_dispatch.record(key, "transport_fallbacks")
+            await _notify(notice, "transport", "Large request is using the provider's safe file/stdin transport.")
+        if (not coding and not _controller_transcript(attempt_messages)
+                and _serialized_request_size(agent, attempt_messages, model, max_tokens, temperature) > hard_cap):
+            trimmed = _drop_oldest_history(
+                agent, original_messages, model, max_tokens, temperature, hard_cap,
+            )
+            if (trimmed is not None and _serialized_request_size(
+                    agent, trimmed, model, max_tokens, temperature) <= hard_cap):
+                attempt_messages = trimmed
+                recovered_history = True
+                model_dispatch.record(key, "context_recoveries")
+                await _notify(notice, "context_recovery", "The request exceeded the configured provider budget; only the oldest conversation history was omitted.")
+            else:
+                attempt_messages = await _summarize_large_latest(
+                    agent, attempt_messages, model, max_tokens, temperature, cwd, hard_cap,
+                )
+                model_dispatch.record(key, "context_recoveries")
+                await _notify(notice, "context_recovery", "The oversized latest request was summarized in bounded same-model chunks before final synthesis.")
+        while True:
+            attempts += 1
+            emitted = False
+            iterator = _stream_completion_raw(
+                agent, attempt_messages, model, max_tokens, temperature,
+                cwd=cwd, coding=coding,
+            )
+            try:
+                async for delta in iterator:
+                    if not delta:
+                        continue
+                    emitted = True
+                    await emit(delta)
+                if not emitted:
+                    raise ProviderError("provider returned no response text", code="empty_response", retryable=True)
+                return
+            except asyncio.CancelledError:
+                raise
+            except BaseException as exc:
+                failure = _normalize_failure(exc)
+                if failure.code == "payload_too_large" and not emitted and not coding:
+                    if _controller_transcript(original_messages):
+                        raise ProviderError(
+                            "provider rejected the protected Litigation controller transcript; it was not shortened",
+                            code="payload_too_large",
+                        ) from exc
+                    recovery_cap = min(
+                        hard_cap,
+                        max(8192, _serialized_request_size(
+                            agent, attempt_messages, model, max_tokens, temperature,
+                        ) // 2),
+                    )
+                    if not recovered_history:
+                        trimmed = _drop_oldest_history(
+                            agent, original_messages, model, max_tokens, temperature, recovery_cap,
+                        )
+                        recovered_history = True
+                        if trimmed is not None and trimmed != attempt_messages:
+                            attempt_messages = trimmed
+                            model_dispatch.record(key, "context_recoveries")
+                            await _notify(notice, "context_recovery", "Provider rejected the request size; retrying with only the oldest conversation history omitted.")
+                            if attempts < 2:
+                                continue
+                    attempt_messages = await _summarize_large_latest(
+                        agent, original_messages, model, max_tokens, temperature, cwd, recovery_cap,
+                    )
+                    model_dispatch.record(key, "context_recoveries")
+                    await _notify(notice, "context_recovery", "Provider still rejected the request size; using bounded same-model chunk summaries for final synthesis.")
+                    recovered = await _collect_raw(
+                        agent, attempt_messages, model, max_tokens, temperature, cwd, False,
+                    )
+                    await emit(recovered)
+                    return
+                if (coding or emitted or attempts >= 2 or not failure.retryable
+                        or failure.code in {"auth", "unknown_model", "policy", "request_rejected"}):
+                    raise failure from exc
+                model_dispatch.record(key, "retries")
+                await _notify(notice, "retry", "Selected model request failed before any output; retrying once on the same model.")
+                await asyncio.sleep(min(1.0, 0.2 * attempts))
+            finally:
+                await iterator.aclose()
+
+    dispatcher = model_dispatch.stream(key, operation, queued_notice=queued_notice)
+    try:
+        async for delta in dispatcher:
+            yield delta
+    finally:
+        await dispatcher.aclose()
 
 
 async def complete(agent: dict[str, Any], messages: list[dict[str, str]],
                    model: str | None = None, max_tokens: int = 2048,
                    temperature: float = 0.7, cwd: str | None = None,
-                   coding: bool = False) -> str:
+                   coding: bool = False,
+                   notice: NoticeCallback | None = None) -> str:
     chunks: list[str] = []
     async for delta in stream_completion(agent, messages, model, max_tokens,
-                                         temperature, cwd=cwd, coding=coding):
+                                         temperature, cwd=cwd, coding=coding,
+                                         notice=notice):
         chunks.append(delta)
     return "".join(chunks)
 
@@ -810,13 +1253,14 @@ async def _stream_openai(base: str, key: str, model: str,
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         async with client.stream("POST", url, headers=headers, json=body) as resp:
             if resp.status_code >= 400:
-                detail = (await resp.aread()).decode("utf-8", "replace")[:400]
-                raise ProviderError(f"{model}: provider error {resp.status_code}: {detail}")
+                raise await _http_failure_from_response(model, resp)
+            terminal = False
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue
                 payload = line[5:].strip()
                 if payload == "[DONE]":
+                    terminal = True
                     break
                 try:
                     obj = json.loads(payload)
@@ -824,10 +1268,15 @@ async def _stream_openai(base: str, key: str, model: str,
                     continue
                 choices = obj.get("choices") or []
                 if choices:
+                    if choices[0].get("finish_reason") is not None:
+                        terminal = True
                     delta = choices[0].get("delta") or {}
                     text = delta.get("content")
                     if text:
                         yield text
+            if not terminal:
+                raise ProviderError(f"{model}: provider stream ended without completion",
+                                    code="empty_response", retryable=True)
 
 
 async def _stream_anthropic(base: str, key: str, model: str,
@@ -845,8 +1294,8 @@ async def _stream_anthropic(base: str, key: str, model: str,
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         async with client.stream("POST", url, headers=headers, json=body) as resp:
             if resp.status_code >= 400:
-                detail = (await resp.aread()).decode("utf-8", "replace")[:400]
-                raise ProviderError(f"{model}: provider error {resp.status_code}: {detail}")
+                raise await _http_failure_from_response(model, resp)
+            terminal = False
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -854,10 +1303,15 @@ async def _stream_anthropic(base: str, key: str, model: str,
                     obj = json.loads(line[5:].strip())
                 except json.JSONDecodeError:
                     continue
+                if obj.get("type") == "message_stop":
+                    terminal = True
                 if obj.get("type") == "content_block_delta":
                     delta = obj.get("delta") or {}
                     if delta.get("type") == "text_delta" and delta.get("text"):
                         yield delta["text"]
+            if not terminal:
+                raise ProviderError(f"{model}: provider stream ended without completion",
+                                    code="empty_response", retryable=True)
 
 
 async def _stream_responses(base: str, key: str, model: str,
@@ -877,8 +1331,8 @@ async def _stream_responses(base: str, key: str, model: str,
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         async with client.stream("POST", url, headers=headers, json=body) as resp:
             if resp.status_code >= 400:
-                detail = (await resp.aread()).decode("utf-8", "replace")[:400]
-                raise ProviderError(f"{model}: provider error {resp.status_code}: {detail}")
+                raise await _http_failure_from_response(model, resp)
+            terminal = False
             async for line in resp.aiter_lines():
                 if not line.startswith("data:"):
                     continue
@@ -889,7 +1343,47 @@ async def _stream_responses(base: str, key: str, model: str,
                     obj = json.loads(payload)
                 except json.JSONDecodeError:
                     continue
+                if obj.get("type") in {"response.completed", "response.done"}:
+                    terminal = True
                 if obj.get("type") == "response.output_text.delta":
                     text = obj.get("delta")
                     if isinstance(text, str) and text:
                         yield text
+            if not terminal:
+                raise ProviderError(f"{model}: provider stream ended without completion",
+                                    code="empty_response", retryable=True)
+
+
+def _http_failure(model: str, status: int) -> ProviderError:
+    if status == 413:
+        return ProviderError(f"{model}: provider rejected the request size",
+                             code="payload_too_large")
+    if status in {401, 403}:
+        return ProviderError(f"{model}: provider authentication failed", code="auth")
+    if status == 429:
+        return ProviderError(f"{model}: provider rate limit reached",
+                             code="rate_limit", retryable=True)
+    if status in {408, 425} or status >= 500:
+        return ProviderError(f"{model}: provider temporarily unavailable ({status})",
+                             code="transient", retryable=True)
+    return ProviderError(f"{model}: provider rejected the request ({status})",
+                         code="request_rejected")
+
+
+async def _http_failure_from_response(model: str, response: httpx.Response) -> ProviderError:
+    diagnostic = bytearray()
+    async for chunk in response.aiter_bytes():
+        remaining = 4096 - len(diagnostic)
+        if remaining <= 0:
+            break
+        diagnostic.extend(chunk[:remaining])
+        if len(diagnostic) >= 4096:
+            break
+    safe_category = diagnostic.decode("utf-8", "replace").lower()
+    if response.status_code == 400 and any(term in safe_category for term in (
+        "context_length_exceeded", "context length", "request_too_large",
+        "payload too large", "maximum context", "too many tokens",
+    )):
+        return ProviderError(f"{model}: provider rejected the request size",
+                             code="payload_too_large")
+    return _http_failure(model, response.status_code)

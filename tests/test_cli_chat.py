@@ -15,6 +15,9 @@ class _FakeResponse:
     def __iter__(self):
         return iter(self._lines)
 
+    def read(self):
+        return b"{}"
+
     def __enter__(self):
         return self
 
@@ -72,6 +75,17 @@ class StreamTurnTests(unittest.TestCase):
         # streamed agents end with a newline; headers are separated
         self.assertIn("\n▸ Claude", text)
 
+    def test_dispatch_notice_renders_as_status(self) -> None:
+        code, text = self._run([
+            {"type": "start", "agent": "grok", "label": "Grok"},
+            {"type": "dispatch", "agent": "grok", "kind": "queued",
+             "message": "Waiting for capacity on the selected model."},
+            {"type": "done", "agent": "grok", "content": "answer"},
+            {"type": "turn_done"},
+        ])
+        self.assertEqual(code, 0)
+        self.assertIn("… Waiting for capacity", text)
+
     def test_ring_diff_phase_and_error_events(self) -> None:
         code, text = self._run([
             {"type": "phase", "phase": "crosstalk"},
@@ -97,6 +111,15 @@ class StreamTurnTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "at least one participant"):
                 cli.stream_turn("http://x", "room1", {"text": "hi"})
 
+    def test_clean_eof_without_turn_done_is_interrupted(self) -> None:
+        response = _FakeResponse(_sse([
+            {"type": "start", "agent": "grok", "label": "Grok"},
+            {"type": "delta", "agent": "grok", "text": "partial"},
+        ]))
+        with mock.patch.object(cli.urllib.request, "urlopen", return_value=response):
+            with self.assertRaisesRegex(RuntimeError, "before turn completion"):
+                cli.stream_turn("http://x", "room1", {"text": "hi"}, out=io.StringIO())
+
 
 class ParserTests(unittest.TestCase):
     def test_send_command_shape(self) -> None:
@@ -114,6 +137,11 @@ class ParserTests(unittest.TestCase):
              "--title", "Test", "--crosstalk"])
         self.assertEqual(args.participant, ["grok", "claude"])
         self.assertTrue(args.crosstalk)
+
+    def test_request_uses_caller_timeout_for_long_provider_operations(self) -> None:
+        with mock.patch.object(cli.urllib.request, "urlopen", return_value=_FakeResponse([])) as opened:
+            cli.request("POST", "/api/models/claude/check", url="http://x", timeout=900)
+        self.assertEqual(opened.call_args.kwargs["timeout"], 900)
 
 
 if __name__ == "__main__":

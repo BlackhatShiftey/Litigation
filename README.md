@@ -19,6 +19,10 @@ whole room decide.
   envelope, then tallies majority, confidence, and dissents into a verdict card.
 - **Streaming** — provider events stream over SSE. Subscription CLI replies
   appear when their isolated command finishes.
+- **Per-model dispatch** — chat, cross-talk, votes, connection checks, and
+  Projects share bounded FIFO capacity for each canonical provider and exact
+  selected model, with safe large-prompt transports and bounded same-model
+  recovery. See [docs/MODEL_DISPATCH.md](docs/MODEL_DISPATCH.md).
 - **Persistence** — rooms and transcripts in a local SQLite DB (`litigation.db`).
 - **Durable projects** — share committed local files and tracked issues with
   subscription agents, preserve append-only handoffs and outputs, run bounded
@@ -164,6 +168,7 @@ Omit `env_key` (or leave it empty) for a local server that needs no key; set
 |---|---|
 | `server.py` | FastAPI app: rooms, SSE turn orchestration, cross-talk, votes |
 | `providers.py` | Provider registry + OpenAI/Anthropic streaming adapters |
+| `model_dispatch.py` | Event-loop-local per-provider/model admission, deadlines, and safe counters |
 | `ring.py` | Decoder ring: envelope encode/decode/tally |
 | `db.py` | SQLite persistence |
 | `index.html` | Single-file UI (no build step) |
@@ -177,11 +182,12 @@ Omit `env_key` (or leave it empty) for a local server that needs no key; set
 
 ```
 GET  /api/models                     → available providers
+GET  /api/dispatch                   → safe per-model capacity/counter snapshot
 POST /api/models/{id}/check          → safe subscription connection check
 GET/POST /api/rooms                  → list / create rooms
 GET/PATCH/DELETE /api/rooms/{id}     → room + transcript (PATCH adds/drops
                                       participants on a started room)
-POST /api/rooms/{id}/send            → SSE stream (start/delta/done/ring/error)
+POST /api/rooms/{id}/send            → SSE stream (start/dispatch/delta/done/ring/error)
 POST /api/rooms/{id}/vote            → tallied verdicts
 GET/POST /api/projects               → list / create managed projects
 GET/POST /api/projects/{id}/handoffs → list / queue durable agent work

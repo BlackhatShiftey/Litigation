@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import stat
 import sys
 import tempfile
 import unittest
@@ -15,12 +16,15 @@ import providers
 
 FAKE_CLI = r'''import json
 import os
+import stat
 import sys
 
 capture = os.environ["LITIGATION_TEST_CAPTURE"]
+stdin_text = sys.stdin.read()
 payload = {
     "argv": sys.argv[1:],
-    "stdin": sys.stdin.read(),
+    "stdin": stdin_text,
+    "stdin_is_regular": stat.S_ISREG(os.fstat(0).st_mode),
     "env": {
         name: (name in os.environ)
         for name in (
@@ -55,10 +59,20 @@ if mode == "invalid-json":
     print("not-json")
 elif mode == "antigravity-json":
     print(json.dumps({"status": "SUCCESS", "response": "antigravity reply"}))
+elif mode == "antigravity-stream-json":
+    print(json.dumps({"event": "init", "private": "not returned"}))
+    print(json.dumps({"event": "step_update", "private": "not returned"}))
+    print(json.dumps({"event": "result", "result": {
+        "status": "SUCCESS", "response": "antigravity stream reply",
+        "private": "not returned"}}))
 elif mode == "zero-timeout":
     print(json.dumps({"status": "SUCCESS", "response": "partial"}))
     print("print timeout; turn still in progress; partial output", file=sys.stderr)
 elif mode == "cline-ndjson":
+    primer = "Respond to the complete piped input. Follow its instructions and do not call native tools."
+    if os.environ.get("LITIGATION_TEST_REQUIRE_CLINE_PRIMER") == "1":
+        if not payload["stdin_is_regular"] or primer not in payload["argv"]:
+            raise SystemExit(9)
     print(json.dumps({"type": "agent_event", "event": {
         "type": "content_start", "contentType": "text", "text": "cline "}}))
     print(json.dumps({"type": "agent_event", "event": {
@@ -159,6 +173,131 @@ class ProviderCliTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("--no-subagents", argv)
         self.assertIn("--disable-web-search", argv)
         self.assertNotIn("--always-approve", argv)
+
+    async def test_grok_60k_unicode_uses_retained_private_prompt_file(self) -> None:
+        agent = self._fake_agent("grok")
+        retained = self.root / "retained"
+        prompt = ("x" * 60_000) + "🙂終"
+        with mock.patch.dict(os.environ, {
+            "LITIGATION_PROVIDER_STATE_ROOT": str(retained),
+            "LITIGATION_CLI_ARGV_THRESHOLD_BYTES": "49152",
+        }):
+            reply = await providers.complete(agent, [{"role": "user", "content": prompt}])
+        self.assertEqual(reply, "plain reply")
+        captured = json.loads(self.capture.read_text(encoding="utf-8"))
+        argv = captured["argv"]
+        self.assertIn("--prompt-file", argv)
+        path = Path(argv[argv.index("--prompt-file") + 1])
+        self.assertEqual(path.read_text(encoding="utf-8"), prompt)
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(captured["stdin"], "")
+
+    async def test_cline_60k_unicode_uses_stdin_without_losing_transform(self) -> None:
+        agent = self._fake_agent("cline")
+        agent["cli_state_root"] = str(self.root / "cline-state")
+        retained = self.root / "retained"
+        agent["cli_env"] = {
+            **agent["cli_env"],
+            "LITIGATION_TEST_MODE": "cline-ndjson",
+            "LITIGATION_TEST_REQUIRE_CLINE_PRIMER": "1",
+        }
+        prompt = ("文🙂" * 10_000) + "tail"
+        with mock.patch.dict(os.environ, {
+            "LITIGATION_PROVIDER_STATE_ROOT": str(retained),
+        }):
+            reply = await providers.complete(agent, [{"role": "user", "content": prompt}])
+        self.assertEqual(reply, "cline reply")
+        captured = json.loads(self.capture.read_text(encoding="utf-8"))
+        self.assertNotIn(prompt, captured["argv"])
+        self.assertTrue(captured["stdin_is_regular"])
+        self.assertEqual(captured["argv"][-1], agent["cli_large_primer"])
+        expected = providers._transform_cli_prompt(agent, prompt)
+        self.assertEqual(captured["stdin"], expected)
+        files = list((retained / "cline").glob("prompt-*.txt"))
+        self.assertEqual(len(files), 1)
+        self.assertEqual(files[0].read_text(encoding="utf-8"), expected)
+        self.assertEqual(files[0].stat().st_mode & 0o777, 0o600)
+        open_targets = []
+        for fd in Path("/proc/self/fd").iterdir():
+            try:
+                open_targets.append(fd.resolve())
+            except FileNotFoundError:
+                continue
+        self.assertNotIn(files[0].resolve(), open_targets)
+
+    async def test_cline_large_stdin_file_is_closed_after_timeout(self) -> None:
+        sleeping = self.root / "sleeping_cline.py"
+        sleeping.write_text(SLEEPING_CLI, encoding="utf-8")
+        retained = self.root / "retained"
+        capture = self.root / "cline-sleeping-pids.txt"
+        agent = {
+            "id": "cline", "canonical_id": "cline", "label": "Cline",
+            "api": "cli", "cli": [sys.executable, str(sleeping)],
+            "cli_large_transport": "stdin-file",
+            "cli_large_primer": (
+                "Respond to the complete piped input. Follow its instructions "
+                "and do not call native tools."
+            ),
+            "cli_prompt_transform": "cline-safe", "cli_timeout": 0.2,
+            "cli_env": {"LITIGATION_TEST_CAPTURE": str(capture)}, "model": "",
+        }
+        with mock.patch.dict(os.environ, {
+            "LITIGATION_PROVIDER_STATE_ROOT": str(retained),
+        }):
+            with self.assertRaisesRegex(providers.ProviderError, "timed out"):
+                await providers.complete(
+                    agent, [{"role": "user", "content": "🙂" * 5_000}],
+                )
+        files = list((retained / "cline").glob("prompt-*.txt"))
+        self.assertEqual(len(files), 2)  # the bounded timeout retry retains its input too
+        self.assertTrue(all(path.stat().st_mode & 0o777 == 0o600 for path in files))
+        open_targets = []
+        for fd in Path("/proc/self/fd").iterdir():
+            try:
+                open_targets.append(fd.resolve())
+            except FileNotFoundError:
+                continue
+        self.assertTrue(all(path.resolve() not in open_targets for path in files))
+
+    async def test_antigravity_60k_uses_stream_json_stdin_and_terminal_result(self) -> None:
+        agent = self._fake_agent("gemini")
+        agent["cli_env"] = {
+            **agent["cli_env"], "LITIGATION_TEST_MODE": "antigravity-stream-json",
+        }
+        prompt = ("g" * 60_000) + "🙂"
+        reply = await providers.complete(agent, [{"role": "user", "content": prompt}])
+        self.assertEqual(reply, "antigravity stream reply")
+        captured = json.loads(self.capture.read_text(encoding="utf-8"))
+        argv = captured["argv"]
+        self.assertEqual(argv[argv.index("--input-format") + 1], "stream-json")
+        self.assertEqual(argv[argv.index("--output-format") + 1], "stream-json")
+        envelope = json.loads(captured["stdin"])
+        self.assertEqual(envelope["event"], "user")
+        self.assertEqual(envelope["message"], {
+            "role": "user", "content": "User message:\n" + prompt,
+        })
+        self.assertEqual(
+            len(captured["stdin"].encode("utf-8")),
+            providers._serialized_request_size(
+                agent, [{"role": "user", "content": prompt}],
+                str(agent["model"]), 2048, 0.7,
+            ),
+        )
+
+    def test_antigravity_stream_parser_rejects_failure_missing_and_malformed_terminal(self) -> None:
+        agent = {"label": "Gemini", "cli_output": "antigravity-stream-json"}
+        cases = (
+            (b'{"event":"result","result":{"status":"FAILURE","response":"private"}}',
+             "did not complete"),
+            (b'{"event":"init"}\n{"event":"step_update"}', "successful terminal"),
+            (b'{"event":"result","result":{"status":"SUCCESS"}}', "no response text"),
+            (b'{"event":"unexpected"}', "malformed"),
+        )
+        for raw, pattern in cases:
+            with self.subTest(pattern=pattern), self.assertRaisesRegex(
+                providers.ProviderError, pattern,
+            ):
+                providers._parse_cli_output(agent, raw)
 
     async def test_gemini_routes_to_antigravity_with_prompt_last(self) -> None:
         agent = self._fake_agent("gemini")
@@ -391,6 +530,241 @@ class SubscriptionDispatchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved["api"], "cli")
         self.assertEqual(resolved["canonical_id"], "openai")
         self.assertEqual(model, "")
+
+
+class ProviderRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self) -> None:
+        self.subscription_patch = mock.patch.dict(os.environ, {
+            "LITIGATION_SUBSCRIPTION_ONLY": "0",
+            "LITIGATION_PROVIDER_PAYLOAD_BYTES": "262144",
+        })
+        self.subscription_patch.start()
+
+    def tearDown(self) -> None:
+        self.subscription_patch.stop()
+
+    async def test_timeout_retries_once_same_model_before_output(self) -> None:
+        calls = 0
+        routed: list[tuple[str, str]] = []
+
+        async def fake_raw(agent, _messages, model, *_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            routed.append((agent["id"], model))
+            if calls == 1:
+                raise providers.ProviderError("timeout", code="timeout", retryable=True)
+            yield "ok"
+
+        agent = {"id": "fake", "api": "openai", "base_url": "http://local", "model": "m"}
+        with mock.patch("providers._stream_completion_raw", side_effect=fake_raw):
+            self.assertEqual(await providers.complete(agent, [{"role": "user", "content": "hi"}]), "ok")
+        self.assertEqual(calls, 2)
+        self.assertEqual(routed, [("fake", "m"), ("fake", "m")])
+
+    async def test_stream_close_waits_for_raw_provider_cleanup_and_releases_lane(self) -> None:
+        stopped = asyncio.Event()
+
+        async def fake_raw(*_args, **_kwargs):
+            try:
+                yield "first"
+                await asyncio.Event().wait()
+            finally:
+                stopped.set()
+
+        agent = {"id": "cleanup", "api": "openai", "base_url": "http://local", "model": "m"}
+        with mock.patch("providers._stream_completion_raw", side_effect=fake_raw):
+            stream = providers.stream_completion(agent, [{"role": "user", "content": "hi"}])
+            self.assertEqual(await anext(stream), "first")
+            await stream.aclose()
+        self.assertTrue(stopped.is_set())
+        lane = next(row for row in providers.model_dispatch.status()
+                    if row["provider"] == "cleanup" and row["model"] == "m")
+        self.assertEqual(lane["active"], 0)
+
+    async def test_auth_partial_and_coding_failures_are_not_replayed(self) -> None:
+        for mode in ("auth", "partial", "coding"):
+            calls = 0
+
+            async def fake_raw(*_args, **_kwargs):
+                nonlocal calls
+                calls += 1
+                if mode == "partial":
+                    yield "partial"
+                raise providers.ProviderError(
+                    "failed", code="auth" if mode == "auth" else "timeout", retryable=True,
+                )
+
+            agent = {"id": "fake", "api": "openai", "base_url": "http://local", "model": "m"}
+            with mock.patch("providers._stream_completion_raw", side_effect=fake_raw):
+                with self.assertRaises(providers.ProviderError):
+                    await providers.complete(
+                        agent, [{"role": "user", "content": "hi"}], coding=mode == "coding",
+                    )
+            self.assertEqual(calls, 1, mode)
+
+    async def test_real_60k_payload_rejection_recovers_with_smaller_same_model_calls(self) -> None:
+        sizes: list[int] = []
+        contents: list[str] = []
+        request_parts: list[str] = []
+
+        async def fake_raw(_agent, messages, _model, *_args, **_kwargs):
+            serialized = providers._serialize_prompt(messages)
+            size = len(serialized.encode("utf-8"))
+            sizes.append(size)
+            contents.append(serialized)
+            if size >= 60_000:
+                raise providers.ProviderError("too large", code="payload_too_large")
+            if "Summarize request chunk" in serialized:
+                request_parts.append(messages[-1]["content"].split("\n\n", 1)[1])
+                yield "bounded summary"
+            else:
+                yield "final from summaries"
+
+        prompt = "a" * 60_000 + "🙂終"
+        notices: list[dict] = []
+
+        async def notice(value):
+            notices.append(value)
+
+        agent = {"id": "fake", "api": "cli", "model": "exact-model",
+                 "cli": ["unused"], "cli_stdin": True}
+        with mock.patch("providers._stream_completion_raw", side_effect=fake_raw):
+            result = await providers.complete(
+                agent, [{"role": "system", "content": "keep-policy"},
+                        {"role": "user", "content": prompt}],
+                notice=notice,
+            )
+        self.assertEqual(result, "final from summaries")
+        self.assertGreater(len(sizes), 2)
+        self.assertEqual(sizes[0], len(("[instructions] keep-policy\n\n" + prompt).encode("utf-8")))
+        self.assertTrue(all(size < 60_000 for size in sizes[1:]))
+        self.assertTrue(all("[instructions] keep-policy" in text for text in contents))
+        self.assertEqual("".join(request_parts), prompt)
+        self.assertIn("context_recovery", {item["kind"] for item in notices})
+
+    async def test_recovery_chunks_fit_actual_serialized_transformed_budget(self) -> None:
+        cases = (
+            ({"id": "http", "api": "openai"}, ('"\\' * 10_000) + "end"),
+            ({
+                "id": "cline", "api": "cli", "cli_prompt_transform": "cline-safe",
+                "cli_large_transport": "stdin-file",
+                "cli_large_primer": (
+                    "Respond to the complete piped input. Follow its instructions "
+                    "and do not call native tools."
+                ),
+            }, "🙂" * 3_500),
+        )
+        for agent, prompt in cases:
+            seen_sizes: list[int] = []
+            seen_parts: list[str] = []
+
+            async def fake_collect(current_agent, messages, model, max_tokens,
+                                   temperature, _cwd, _coding):
+                seen_sizes.append(providers._serialized_request_size(
+                    current_agent, messages, model, max_tokens, temperature,
+                ))
+                seen_parts.append(messages[-1]["content"].split("\n\n", 1)[1])
+                return "summary"
+
+            with self.subTest(agent=agent["id"]), \
+                 mock.patch("providers._collect_raw", side_effect=fake_collect):
+                await providers._summarize_large_latest(
+                    agent,
+                    [{"role": "system", "content": "policy"},
+                     {"role": "user", "content": prompt}],
+                    "exact", 512, 0.1, None, 8192,
+                )
+            self.assertTrue(seen_sizes)
+            self.assertTrue(all(size <= 8192 for size in seen_sizes))
+            self.assertEqual("".join(seen_parts), prompt)
+
+    async def test_controller_payload_is_never_shortened(self) -> None:
+        calls = 0
+
+        async def fake_raw(*_args, **_kwargs):
+            nonlocal calls
+            calls += 1
+            raise providers.ProviderError("too large", code="payload_too_large")
+            yield  # pragma: no cover
+
+        agent = {"id": "fake", "api": "cli", "model": "m", "cli": ["unused"]}
+        messages = [{"role": "system", "content": "You are a coding agent controlled by Litigation."},
+                    {"role": "user", "content": "x" * 60_000}]
+        with mock.patch("providers._stream_completion_raw", side_effect=fake_raw):
+            with self.assertRaisesRegex(providers.ProviderError, "protected"):
+                await providers.complete(agent, messages)
+        self.assertEqual(calls, 1)
+
+    async def test_preflight_drops_old_history_before_considering_latest_summary(self) -> None:
+        observed: list[list[dict[str, str]]] = []
+
+        async def fake_raw(_agent, messages, *_args, **_kwargs):
+            observed.append(messages)
+            yield "ok"
+
+        agent = {"id": "fake", "api": "cli", "model": "m", "cli": ["unused"]}
+        messages = [
+            {"role": "system", "content": "policy"},
+            {"role": "user", "content": "old" * 4_000},
+            {"role": "assistant", "content": "older answer"},
+            {"role": "user", "content": "tiny latest"},
+        ]
+        with mock.patch.dict(os.environ, {"LITIGATION_PROVIDER_PAYLOAD_BYTES": "8192"}), \
+             mock.patch("providers._stream_completion_raw", side_effect=fake_raw):
+            self.assertEqual(await providers.complete(agent, messages), "ok")
+        sent = observed[0]
+        self.assertTrue(any(m["content"] == "policy" for m in sent))
+        self.assertTrue(any(m["content"] == "tiny latest" for m in sent))
+        self.assertFalse(any(m["content"].startswith("oldold") for m in sent))
+        self.assertFalse(any("Summarize request chunk" in m["content"] for m in sent))
+
+    def test_http_failure_is_typed_and_never_contains_body(self) -> None:
+        error = providers._http_failure("m", 413)
+        self.assertEqual(error.code, "payload_too_large")
+        self.assertNotIn("body", str(error))
+
+
+class ProviderHttpTests(unittest.IsolatedAsyncioTestCase):
+    async def _client_for(self, response: providers.httpx.Response):
+        async def handler(_request):
+            return response
+        return providers.httpx.AsyncClient(transport=providers.httpx.MockTransport(handler))
+
+    async def test_http400_context_error_is_payload_too_large_without_body_leak(self) -> None:
+        response = providers.httpx.Response(
+            400,
+            content=b'{"error":{"code":"context_length_exceeded","private":"secret-body"}}',
+        )
+        client = await self._client_for(response)
+        with mock.patch("providers.httpx.AsyncClient", return_value=client):
+            stream = providers._stream_openai(
+                "http://provider", "secret-key", "m",
+                [{"role": "user", "content": "hello"}], 10, 0.1,
+            )
+            with self.assertRaises(providers.ProviderError) as caught:
+                await anext(stream)
+        self.assertEqual(caught.exception.code, "payload_too_large")
+        self.assertNotIn("secret-body", str(caught.exception))
+
+    async def test_incomplete_and_empty_http_streams_fail(self) -> None:
+        bodies = (
+            b'data: {"choices":[{"delta":{"content":"partial"}}]}\n\n',
+            b'',
+        )
+        for body in bodies:
+            with self.subTest(body=bool(body)):
+                client = await self._client_for(providers.httpx.Response(200, content=body))
+                chunks: list[str] = []
+                with mock.patch("providers.httpx.AsyncClient", return_value=client):
+                    stream = providers._stream_openai(
+                        "http://provider", "secret-key", "m",
+                        [{"role": "user", "content": "hello"}], 10, 0.1,
+                    )
+                    with self.assertRaises(providers.ProviderError) as caught:
+                        async for chunk in stream:
+                            chunks.append(chunk)
+                self.assertEqual(caught.exception.code, "empty_response")
+                self.assertEqual(chunks, ["partial"] if body else [])
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ import argparse
 import getpass
 import json
 import os
+import socket
 import sys
 import time
 import urllib.error
@@ -25,7 +26,8 @@ DEFAULT_URL = os.environ.get("LITIGATION_URL", "http://127.0.0.1:8766").rstrip("
 TERMINAL = {"completed", "needs_revision", "failed", "interrupted", "cancelled"}
 
 
-def request(method: str, path: str, body: dict[str, Any] | None = None, *, url: str) -> Any:
+def request(method: str, path: str, body: dict[str, Any] | None = None, *, url: str,
+            timeout: float = 30) -> Any:
     data = None if body is None else json.dumps(body).encode("utf-8")
     req = urllib.request.Request(
         url + path,
@@ -34,7 +36,7 @@ def request(method: str, path: str, body: dict[str, Any] | None = None, *, url: 
         headers={"Content-Type": "application/json", "Accept": "application/json"},
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as response:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
             raw = response.read()
     except urllib.error.HTTPError as exc:
         raw = exc.read()
@@ -43,7 +45,11 @@ def request(method: str, path: str, body: dict[str, Any] | None = None, *, url: 
         except (json.JSONDecodeError, AttributeError):
             detail = f"HTTP {exc.code}"
         raise RuntimeError(str(detail)) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise RuntimeError("Litigation request timed out; the server may still be processing it") from exc
     except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise RuntimeError("Litigation request timed out; the server may still be processing it") from exc
         raise RuntimeError(f"cannot reach Litigation at {url}") from exc
     return json.loads(raw) if raw else None
 
@@ -252,6 +258,7 @@ def stream_turn(url: str, room_id: str, body: dict[str, Any],
     streamed: set[str] = set()
     started = False
     failed = False
+    turn_done = False
     try:
         with urllib.request.urlopen(req, timeout=900) as response:
             for event in iter_sse(response):
@@ -281,10 +288,14 @@ def stream_turn(url: str, room_id: str, body: dict[str, Any],
                           f"{event.get('decoded', '')}", file=out)
                 elif kind == "phase":
                     print(f"— {event.get('phase')} —", file=out)
+                elif kind == "dispatch":
+                    print(f"  … {event.get('message', 'dispatch status updated')}", file=out)
                 elif kind == "error":
                     failed = True
                     print(f"  ✗ {agent}: {event.get('error', 'failed')}",
                           file=sys.stderr)
+                elif kind == "turn_done":
+                    turn_done = True
     except urllib.error.HTTPError as exc:
         raw = exc.read()
         try:
@@ -292,8 +303,20 @@ def stream_turn(url: str, room_id: str, body: dict[str, Any],
         except (json.JSONDecodeError, AttributeError):
             detail = f"HTTP {exc.code}"
         raise RuntimeError(str(detail)) from exc
+    except (TimeoutError, socket.timeout) as exc:
+        raise RuntimeError(
+            "response stream timed out; the message may already be saved, so check the room before retrying"
+        ) from exc
     except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise RuntimeError(
+                "response stream timed out; the message may already be saved, so check the room before retrying"
+            ) from exc
         raise RuntimeError(f"cannot reach Litigation at {url}") from exc
+    if not turn_done:
+        raise RuntimeError(
+            "response stream ended before turn completion; the message may already be saved"
+        )
     if started:
         print(file=out)
     return 1 if failed else 0
@@ -322,7 +345,7 @@ def main(argv: list[str] | None = None) -> int:
             })
         elif args.command == "vote":
             result = request("POST", f"/api/rooms/{urllib.parse.quote(args.room_id)}/vote",
-                             {"question": args.question}, url=url)
+                             {"question": args.question}, url=url, timeout=900)
         elif args.command == "add-model":
             room = request("GET", f"/api/rooms/{urllib.parse.quote(args.room_id)}", url=url)
             additions = []
@@ -338,7 +361,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "check":
             result = request("POST",
                              f"/api/models/{urllib.parse.quote(args.model_id)}/check",
-                             url=url)
+                             url=url, timeout=900)
         elif args.command == "projects":
             result = request("GET", "/api/projects", url=url)
         elif args.command == "create-project":
